@@ -15,8 +15,8 @@ export default function Profile() {
   const navigate = useNavigate()
   const displayName = user?.name || 'Guest user'
   const activityItems = [
-    { icon: '★', label: 'My reviews', value: '0', action: () => {} },
-    { icon: '♥', label: 'My favorites', value: String(favorites.length), action: () => navigate('/favorites') },
+    { icon: '★', label: 'My reviews', value: 0, action: () => navigate('/search') },
+    { icon: '♥', label: 'My favorites', value: favorites.length, action: () => navigate('/favorites') },
     { icon: '⌖', label: 'Recently viewed', value: '', action: () => navigate('/categories') },
   ]
 
@@ -48,7 +48,7 @@ export default function Profile() {
                 <button type="button" className="account-list-row" key={item.label} onClick={item.action}>
                   <span className="account-row-icon" aria-hidden="true">{item.icon}</span>
                   <span>{item.label}</span>
-                  {item.value && <small>{item.value}</small>}
+                  {item.value !== '' && item.value !== undefined && item.value !== null && <small>{String(item.value)}</small>}
                   <b aria-hidden="true">›</b>
                 </button>
               ))}
