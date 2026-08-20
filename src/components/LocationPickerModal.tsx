@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react'
 import { Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useLanguage } from '../context/LanguageContext'
 // Metro resolves this import to the platform-specific map component.
-// @ts-expect-error TypeScript does not apply React Native platform resolution.
 import LocationPickerMap from './LocationPickerMap'
 
 interface LocationPickerModalProps {

@@ -12,16 +12,19 @@
     "version": "1.0.6",
     "android": {
       "package": "com.manakandukur.directory",
-      "versionCode": 7
+      "versionCode": 7,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
-    "extra": {
-      "eas": {
-        "projectId": "d8947819-58a2-49fe-8376-efa481f3d6fc"
-      }
-    },
-    "owner": "yanamalanagarajus-team",
     "plugins": [
       "expo-speech-recognition"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "d8adb304-e13a-47b0-9430-0ba3cf729ca5"
+      }
+    },
+    "owner": "manakundukurs-team"
   }
 }
