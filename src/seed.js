@@ -1,9 +1,12 @@
-import 'dotenv/config'
+import dotenv from 'dotenv'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import vm from 'node:vm'
 import { fileURLToPath } from 'node:url'
 import { ensureSchema, query } from './database.js'
+
+dotenv.config({ path: '.env.local' })
+dotenv.config()
 
 const backendDirectory = path.dirname(fileURLToPath(import.meta.url))
 const workspaceDirectory = path.resolve(backendDirectory, '../..')

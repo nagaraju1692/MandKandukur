@@ -6,12 +6,17 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "seed": "node src/seed.js"
+    "seed": "node src/seed.js",
+    "upload-images": "node scripts/upload-images.js"
   },
   "dependencies": {
+    "@azure/storage-blob": "^12.33.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
+    "mime-types": "^3.0.2",
+    "multer": "^2.2.0",
+    "node-fetch": "^3.3.2",
     "pg": "^8.16.3"
   }
 }
