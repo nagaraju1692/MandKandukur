@@ -7,6 +7,7 @@
       "android",
       "web"
     ],
+    "icon": "./src/assets/manakundur-app-icon-square.png",
     "sdkVersion": "54.0.0",
     "version": "1.0.0",
     "android": {
@@ -18,6 +19,9 @@
         "projectId": "d8947819-58a2-49fe-8376-efa481f3d6fc"
       }
     },
-    "owner": "yanamalanagarajus-team"
+    "owner": "yanamalanagarajus-team",
+    "plugins": [
+      "expo-speech-recognition"
+    ]
   }
 }

@@ -15,23 +15,33 @@ type ReviewContextValue = {
   getReviewStats: (businessId: string) => { rating: number; count: number }
   getReviews: (businessId: string) => Review[]
   submitReview: (businessId: string, rating: number, comment: string) => Promise<void>
+  loading: boolean
+  error: string | null
+  retry: () => Promise<void>
 }
 
 const ReviewContext = createContext<ReviewContextValue | undefined>(undefined)
 
 export function ReviewProvider({ children }: { children: React.ReactNode }) {
   const [reviews, setReviews] = useState<Review[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const { user } = useAuth()
 
-  useEffect(() => {
-    let active = true
-    fetchJson<{ data: Review[] }>('/api/reviews').then((response) => {
-      if (active) setReviews(response.data)
-    }).catch(() => {
-      if (active) setReviews([])
-    })
-    return () => { active = false }
-  }, [])
+  const loadReviews = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const response = await fetchJson<{ data: Review[] }>('/api/reviews')
+      setReviews(response.data)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to load reviews')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { loadReviews() }, [])
 
   const getReviewStats = (businessId: string) => {
     const businessReviews = reviews.filter((review) => review.businessId === businessId)
@@ -48,11 +58,11 @@ export function ReviewProvider({ children }: { children: React.ReactNode }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userPhone: user.phone, rating, comment }),
-    })
+    }, user.phone)
     setReviews((current) => [...current, response.data])
   }
 
-  const value = useMemo(() => ({ getReviewStats, getReviews, submitReview }), [reviews])
+  const value = useMemo(() => ({ getReviewStats, getReviews, submitReview, loading, error, retry: loadReviews }), [reviews, loading, error])
   return <ReviewContext.Provider value={value}>{children}</ReviewContext.Provider>
 }
 

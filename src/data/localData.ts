@@ -1,12 +1,13 @@
-import kvKandukurGallery from '../images/kv-kandukur-gallery.jpeg'
-import narayanaOlympiadSchool from '../images/narayana-olympiad-school.jpg'
-import pecCampus from '../images/pec-campus.jpg'
-import gayatriDegreeCampus from '../images/gayatri-campus-candidate.jpg'
-import sriGouthamHighSchool from '../images/sri-goutham-high-school.jpg'
-import sriSamskrutiSchool from '../images/sri-samskruti-school.jpg'
-import trrGdcCampus1 from '../images/TRR_GDC_campus1.jpg'
-import trrGdcCampus2 from '../images/TRR_GDC_campus2.jpg'
-import trrGdcGallery from '../images/trr-gdc-gallery.jpg'
+// Blob names resolved to Azure Storage URLs by the backend.
+const kvKandukurGallery = '/images/kv-kandukur-gallery.jpeg'
+const narayanaOlympiadSchool = '/images/narayana-olympiad-school.jpg'
+const pecCampus = '/images/pec-campus.jpg'
+const gayatriDegreeCampus = '/images/gayatri-campus-candidate.jpg'
+const sriGouthamHighSchool = '/images/sri-goutham-high-school.jpg'
+const sriSamskrutiSchool = '/images/sri-samskruti-school.jpg'
+const trrGdcCampus1 = '/images/TRR_GDC_campus1.jpg'
+const trrGdcCampus2 = '/images/TRR_GDC_campus2.jpg'
+const trrGdcGallery = '/images/trr-gdc-gallery.jpg'
 
 export const categories = [
  { id: '1', name: 'Education', parentId: null },

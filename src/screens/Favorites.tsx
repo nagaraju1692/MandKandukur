@@ -2,34 +2,59 @@ import React from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useAuth } from '../context/AuthContext'
 import BottomNav from './BottomNav'
+import MobileHeader from './MobileHeader'
 import { useLanguage } from '../context/LanguageContext'
 import { useNearby } from '../context/NearbyContext'
 import { useDirectory } from '../context/DirectoryContext'
+import { getBusinessImage } from '../utils/categoryImages'
+import RemoteImage from '../ui/RemoteImage'
+import { colors } from '../ui/theme'
+
+const favoriteIcons: Record<string, string> = {
+  Education: '🎓', 'Education & Institutions': '🎓', Hospitals: '✚', 'Hospitals & Clinics': '🏥', 'Medical shops': '✦', 'Medical Shops': '💊', 'Diagnostic Lab Centers': '🧪', 'Radiology Scan Centers': '🩻', Restaurants: '🍽️', 'Restaurants & Hotels': '🍽️',
+  Lodges: '▣', 'Bus stand': '▤', 'Police station': '⌁', 'Police Station': '🚔', '108 Emergency': '🚑', 'Fire Station': '🚒', Emergency: '🚨', Temples: '🛕',
+  Banks: '₹', 'Movie Theaters': '▶', 'Shopping clothes': '◈', 'Retail marts': '▦',
+  'Beauty clinics': '✧', 'Real Estate': '🏘️', Agriculture: '🌾',
+  'Food & Meat Markets': '🥬', 'Rental Transport': '🚚', 'Tourist Places': '🗺️',
+  'Rental Houses': '🏠', 'Construction Materials': '🧱', 'Government Offices': '🏛️',
+  'Buy & Sell': '🏷️', 'Cars for Sale': '🚗', 'Bikes for Sale': '🏍️', 'Tractors for Sale': '🚜', 'Other Items for Sale': '🏷️',
+  'Common Utilities': '🧰', 'ATM Centers': '🏧', 'Petrol Pumps': '⛽', 'Gas Centers': '🔥', 'EV Charging Stations': '🔌', 'Public Toilets': '🚻',
+  'Cold Storages': '❄️', 'Manpower Services': '🛠️', 'Show Rooms': '🏬',
+  'Bike & Car Mechanics': '🔧', 'Plot for Sale': '📐', 'House or Apartment for Sale': '🏠', 'Land for Sale': '🌱',
+  'Tobacco Boards': '🌿', 'Vegetable Markets': '🥕', 'Fish Markets': '🐟',
+  'Fruit Markets': '🍎', 'Mutton Shops': '🍖', 'Chicken Shops': '🍗', 'Sweet Shops': '🍬',
+  'Cars for Rent': '🚗', 'Autos for Rent': '🛺', 'Lorries for Rent': '🚛', 'Tractors for Rent': '🚜', 'JCBs for Rent': '🏗️', 'RealEstate': '▣',
+  'Training Institutions': '🎓', 'Computer Training': '💻', 'Spoken English': '🗣️', 'Driving Schools': '🚗', 'Skill Development': '🧰',
+  Plumber: '🔧', Electricians: '⚡', 'Tiles Work': '◼️', 'False Ceiling': '🏠', 'Bore Points': '💧', 'Vehicle Wash': '🚿',
+}
 
 export default function Favorites({ navigation }: any) {
-  const { favorites, isLoggedIn, user, logout } = useAuth()
-  const { t, category: categoryLabel } = useLanguage()
+  const { favorites, isLoggedIn, user } = useAuth()
+  const { t, category: categoryLabel, businessName } = useLanguage()
   const { distances, ready, ensureAddresses, sortNearest } = useNearby()
   const { businesses } = useDirectory()
+  const [selectedBusinessId, setSelectedBusinessId] = React.useState<string | null>(null)
   const savedBusinesses = businesses.filter((business) => favorites.includes(business.id))
   React.useEffect(() => { if (ready) ensureAddresses(savedBusinesses.map((business) => ({ id: business.id, address: business.address, latitude: business.latitude, longitude: business.longitude }))) }, [savedBusinesses.length, ready])
 
   return (
     <View style={styles.screen}>
-    <View style={styles.topStrip} />
-
+      <MobileHeader navigation={navigation} />
       <View style={styles.pageHeader}>
       <Pressable style={styles.pageBack} onPress={() => navigation.goBack()}><Text style={styles.pageBackText}>←</Text></Pressable>
-      <View style={styles.pageHeaderCopy}><Text style={styles.pageKicker}>{t('MY LIST', 'నా జాబితా')}</Text><Text style={styles.pageTitle}>{t('Favorites', 'ఇష్టమైనవి')}</Text></View>
+      <View style={styles.pageHeaderCopy}>
+        <View style={styles.pageTitleRow}>
+          <View style={styles.pageIconBadge}><Text style={styles.pageIconText}>♥</Text></View>
+          <View>
+            <Text style={styles.pageKicker}>{t('MY LIST', 'నా జాబితా')}</Text>
+            <Text style={styles.pageTitle}>{t('Favorites', 'ఇష్టమైనవి')}</Text>
+          </View>
+        </View>
+      </View>
         <View style={styles.countBubble}><Text style={styles.countBubbleText}>{favorites.length}</Text></View>
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.userRow}>
-          <View style={styles.userAvatar}><Text style={styles.userAvatarText}>{user?.name?.charAt(0).toUpperCase() || 'G'}</Text></View>
-          <Text style={styles.userName}>{user?.name || 'Guest user'}</Text>
-          {isLoggedIn && <Pressable onPress={logout}><Text style={styles.logout}>{t('Logout', 'లాగ్ అవుట్')}</Text></Pressable>}
-        </View>
         {!isLoggedIn || savedBusinesses.length === 0 ? (
           <View style={styles.emptyCard}>
             <View style={styles.heart}><Text style={styles.heartText}>♥</Text></View>
@@ -41,12 +66,19 @@ export default function Favorites({ navigation }: any) {
           </View>
         ) : (
           sortNearest(savedBusinesses).map((business) => (
-            <Pressable key={business.id} style={styles.businessCard} onPress={() => navigation.navigate('BusinessDetails', { id: business.id })}>
-              <View style={styles.businessIcon}><Text style={styles.businessIconText}>{business.categoryName?.charAt(0) || 'M'}</Text></View>
+            <Pressable key={business.id} style={styles.businessCard} onPress={() => { setSelectedBusinessId(business.id); navigation.navigate('BusinessDetails', { id: business.id }) }}>
+              <View style={[styles.businessImageWrap, selectedBusinessId === business.id && styles.businessImageWrapSelected]}>
+                <RemoteImage
+                  source={getBusinessImage(business.image, business.categoryName)}
+                  style={styles.businessImage}
+                  resizeMode="cover"
+                  fallbackContent={<View style={styles.businessIconFallback}><Text style={styles.businessIconText}>{favoriteIcons[business.categoryName || ''] || business.categoryName?.charAt(0) || '📍'}</Text></View>}
+                />
+              </View>
               <View style={styles.businessBody}>
-                <Text style={styles.businessName}>{business.name}</Text>
+                <Text style={styles.businessName}>{businessName(business.name, business.nameTe)}</Text>
                 <Text style={styles.businessCategory}>{categoryLabel(business.categoryName)}</Text>
-                <Text style={styles.businessAddress}>{business.address}</Text><Text style={styles.businessDistance}>{(distances[business.id] ?? distances[business.address]) !== undefined ? `${((distances[business.id] ?? distances[business.address]) as number).toFixed(1)} km away` : 'Finding distance…'}</Text>
+                <Text style={styles.businessAddress}>{business.address}</Text><Text style={styles.businessDistance}>{(distances[business.id] ?? distances[business.address]) !== undefined ? `${((distances[business.id] ?? distances[business.address]) as number).toFixed(1)} ${t('km away', 'కి.మీ దూరంలో')}` : t('Finding distance…', 'దూరాన్ని కనుగొంటున్నాము…')}</Text>
               </View>
               <Text style={styles.arrow}>›</Text>
             </Pressable>
@@ -59,16 +91,18 @@ export default function Favorites({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#EAEAF9' },
-  topStrip: { height: 18, backgroundColor: '#B67870' },
-  pageHeader: { minHeight: 82, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, backgroundColor: '#4A4AD5' },
-  pageBack: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', marginRight: 2, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.18)' },
-  pageBackText: { color: '#FFF', fontSize: 24, lineHeight: 27, textAlign: 'center' },
-  pageHeaderCopy: { flex: 1, marginLeft: 14 },
-  pageKicker: { color: '#D8D7FF', fontSize: 12, fontWeight: '800', letterSpacing: 1 },
-  pageTitle: { marginTop: 2, color: '#FFF', fontSize: 27, fontWeight: '800' },
-  countBubble: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)' },
-  countBubbleText: { color: '#FFF', fontSize: 13, fontWeight: '800' },
+  screen: { flex: 1, backgroundColor: colors.background },
+  pageHeader: { minHeight: 72, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10, backgroundColor: '#EFEAFE' },
+  pageBack: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginRight: 10, borderRadius: 18, backgroundColor: '#E1D9FF' },
+  pageBackText: { color: '#4A4AD5', fontSize: 22, lineHeight: 24, textAlign: 'center' },
+  pageHeaderCopy: { flex: 1, marginLeft: 0 },
+  pageTitleRow: { flexDirection: 'row', alignItems: 'center' },
+  pageIconBadge: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', marginRight: 10, borderRadius: 15, backgroundColor: '#E1D9FF' },
+  pageIconText: { color: '#4A4AD5', fontSize: 16, lineHeight: 18 },
+  pageKicker: { color: '#5B52D1', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  pageTitle: { marginTop: 2, color: '#2F2F43', fontSize: 22, fontWeight: '800' },
+  countBubble: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: '#E1D9FF' },
+  countBubbleText: { color: '#4A4AD5', fontSize: 12, fontWeight: '800' },
   userRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
   userAvatar: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: '#5B55D9' },
   userAvatarText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
@@ -83,10 +117,13 @@ const styles = StyleSheet.create({
   label: { marginTop: 15, color: '#5B55D9', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
   heading: { marginTop: 18, color: '#202332', fontSize: 22, fontWeight: '800', textAlign: 'center' },
   copy: { marginTop: 9, color: '#737385', fontSize: 13, lineHeight: 20, textAlign: 'center' },
-  button: { marginTop: 20, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 7, backgroundColor: '#514BD5' },
-  buttonText: { color: '#FFF', fontSize: 12, fontWeight: '800' },
-  businessCard: { flexDirection: 'row', alignItems: 'center', padding: 14, marginBottom: 12, borderRadius: 12, borderWidth: 1, borderColor: '#DDE2F5', backgroundColor: '#F8F9FF' },
-  businessIcon: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', marginRight: 12, backgroundColor: '#EEF0FF' },
+  button: { minWidth: 120, minHeight: 36, marginTop: 20, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18, paddingVertical: 7, borderRadius: 6, borderWidth: 1, borderColor: '#DCCFE0', backgroundColor: '#1A061D' },
+  buttonText: { color: '#FFF', fontSize: 12, fontWeight: '800', textAlign: 'center' },
+  businessCard: { flexDirection: 'row', alignItems: 'center', padding: 14, marginBottom: 12, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.75)', backgroundColor: 'rgba(255,255,255,0.82)', shadowColor: '#8C5B4B', shadowOpacity: 0.08, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  businessImageWrap: { width: 96, height: 96, borderRadius: 14, overflow: 'hidden', marginRight: 12, backgroundColor: '#EEF0FF', borderWidth: 1, borderColor: '#E7D7D0' },
+  businessImageWrapSelected: { borderWidth: 2, borderColor: '#514BD5' },
+  businessImage: { width: '100%', height: '100%' },
+  businessIconFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEF0FF' },
   businessIconText: { color: '#514BD5', fontSize: 18, fontWeight: '800' },
   businessBody: { flex: 1 },
   businessName: { color: '#202332', fontSize: 16, fontWeight: '800', lineHeight: 22 },

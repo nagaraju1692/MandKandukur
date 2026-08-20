@@ -5,18 +5,24 @@ export type Category = { id: string; name: string; parentId: string | null }
 export type Business = {
   id: string
   name: string
+  nameTe?: string
   categoryId: string
   categoryName: string
   address: string
   latitude?: number | null
   longitude?: number | null
   phone?: string
+  ownerName?: string
+  rooms?: string
+  price?: string
+  facing?: string
   website?: string
   description?: string
   image?: string
   gallery?: string[]
   status?: string
   submittedBy?: string
+  createdAt?: string
 }
 export type Announcement = {
   id: string
@@ -25,6 +31,7 @@ export type Announcement = {
   description: string
   type: string
   image: string
+  createdAt?: string | null
   startDate?: string | null
   endDate?: string | null
 }
@@ -35,6 +42,7 @@ type DirectoryContextValue = {
   announcements: Announcement[]
   loading: boolean
   error: string | null
+  retry: () => Promise<void>
   refreshBusinesses: () => Promise<void>
 }
 
@@ -47,31 +55,35 @@ export function DirectoryProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const loadDirectory = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [categoryResponse, businessResponse, announcementResponse] = await Promise.all([
+        fetchJson<{ data: Category[] }>('/api/categories'),
+        fetchJson<{ data: Business[] }>('/api/businesses'),
+        fetchJson<{ data: Announcement[] }>('/api/announcements'),
+      ])
+      setCategories(categoryResponse.data)
+      setBusinesses(businessResponse.data)
+      setAnnouncements(announcementResponse.data)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to load directory')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const refreshBusinesses = async () => {
     const response = await fetchJson<{ data: Business[] }>('/api/businesses')
     setBusinesses(response.data)
   }
 
   useEffect(() => {
-    let active = true
-    Promise.all([
-      fetchJson<{ data: Category[] }>('/api/categories'),
-      fetchJson<{ data: Business[] }>('/api/businesses'),
-      fetchJson<{ data: Announcement[] }>('/api/announcements'),
-    ]).then(([categoryResponse, businessResponse, announcementResponse]) => {
-      if (!active) return
-      setCategories(categoryResponse.data)
-      setBusinesses(businessResponse.data)
-      setAnnouncements(announcementResponse.data)
-    }).catch((requestError: Error) => {
-      if (active) setError(requestError.message)
-    }).finally(() => {
-      if (active) setLoading(false)
-    })
-    return () => { active = false }
+    loadDirectory()
   }, [])
 
-  const value = useMemo(() => ({ categories, businesses, announcements, loading, error, refreshBusinesses }), [categories, businesses, announcements, loading, error])
+  const value = useMemo(() => ({ categories, businesses, announcements, loading, error, retry: loadDirectory, refreshBusinesses }), [categories, businesses, announcements, loading, error])
   return <DirectoryContext.Provider value={value}>{children}</DirectoryContext.Provider>
 }
 

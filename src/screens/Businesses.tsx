@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
-import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, Image } from 'react-native'
-import { buildGoogleMapsDirectionsUrl } from '../services/api'
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { buildGoogleMapsDirectionsUrl, fetchJson } from '../services/api'
 import BottomNav from './BottomNav'
 import MobileHeader from './MobileHeader'
 import { useLanguage } from '../context/LanguageContext'
@@ -10,35 +10,78 @@ import { useReviews } from '../context/ReviewContext'
 import { useNearby } from '../context/NearbyContext'
 import { useSubmittedListings } from '../context/SubmittedListingsContext'
 import { useDirectory } from '../context/DirectoryContext'
+import DirectoryState from './DirectoryState'
+import { colors } from '../ui/theme'
+import FocusTextInput from '../ui/FocusTextInput'
+import RemoteImage from '../ui/RemoteImage'
 
 const subcategoryIcons: Record<string, string> = {
-  'Plots for Sale': '📐', 'Property Agents': '🤝', 'Tobacco Boards': '🌿', 'Vegetable Markets': '🥕',
+  Education: '🎓', 'Education & Institutions': '🎓', 'Degree colleges': '🎓', 'Engineering colleges': '🎓', Intermediate: '🎓', 'Polytechnic colleges': '🎓', Schools: '🎓', Hospitals: '✚', 'Hospitals & Clinics': '🏥', 'Medical shops': '✦', 'Medical Shops': '💊', 'Diagnostic Lab Centers': '🧪', 'Radiology Scan Centers': '🩻', Restaurants: '🍽️', 'Restaurants & Hotels': '🍽️', Lodges: '▣', 'Bus stand': '▤',
+  'Police station': '⌁', 'Police Station': '🚔', '108 Emergency': '🚑', 'Fire Station': '🚒', Temples: '🛕', Banks: '🏦', 'Banks & ATMs': '🏧', 'Movie Theaters': '▶', 'Shopping clothes': '◈', 'Retail marts': '▦',
+  'Beauty clinics': '✧', 'Real Estate': '🏘️', Agriculture: '🌾', 'Food & Meat Markets': '🥬', 'Rental Transport': '🚚',
+  'Tourist Places': '🗺️', 'Rental Houses': '🏠', 'Construction Materials': '🧱', 'Government Offices': '🏛️', 'Buy & Sell': '🏷️',
+  'Common Utilities': '🧰', 'ATM Centers': '🏧', 'Petrol Pumps': '⛽', 'Gas Centers': '🔥', 'EV Charging Stations': '🔌', 'Public Toilets': '🚻',
+  'Cold Storages': '❄️', 'Manpower Services': '🛠️', 'Show Rooms': '🏬', 'Bike & Car Mechanics': '🔧',
+  'Plot for Sale': '📐', 'House or Apartment for Sale': '🏠', 'Land for Sale': '🌱', 'Tobacco Boards': '🌿', 'Vegetable Markets': '🥕',
   'Fish Markets': '🐟', 'Fruit Markets': '🍎', 'Mutton Shops': '🍖', 'Chicken Shops': '🍗', 'Sweet Shops': '🍬',
-  'Cars for Rent': '🚗', 'Autos for Rent': '🛺', 'Lorries for Rent': '🚛', 'Tractors for Rent': '🚜', 'JCBs for Rent': '🏗️',
+  'Cars for Rent': '🚗', 'Autos for Rent': '🛺', 'Lorries for Rent': '🚛', 'Tractors for Rent': '🚜', 'JCBs for Rent': '🏗️', 'Cars for Sale': '🚗', 'Bikes for Sale': '🏍️', 'Tractors for Sale': '🚜', 'Other Items for Sale': '🏷️',
   'Rallapadu Reservoir': '🌊', Malakonda: '⛰️', Swagameswaram: '🛕', Sand: '⛱️', Kankara: '🪨', Cement: '🏗️', Bricks: '🧱',
   'MRO Office': '🏢', 'Municipality Office': '🏛️', 'Registration Office': '📄', Mestri: '👷', Plumber: '🔧', Electricians: '⚡',
   'Tiles Work': '◼️', 'False Ceiling': '🏠', 'Bore Points': '💧', 'Bike Show Rooms': '🏍️', 'Car Show Rooms': '🚘', 'Vehicle Wash': '🚿',
   'Computer Training': '💻', 'Spoken English': '🗣️', 'Driving Schools': '🚗', 'Skill Development': '🧰',
+  'Training Institutions': '🎓', 'RealEstate': '▣', 'Agricultural info': '🌾', 'School': '🎓', 'College': '🎓',
+  'Book Stores': '📚', 'Photo Studios': '📷', 'Courier Services': '📦', 'Kids Toys & Cycles': '🚲',
+  'Vehicle Battery Shops': '🔋', 'Key & Lock Repair': '🔑', 'Painting & Hardware': '🎨', 'Dry Fruit Stores': '🥭',
+  'Mobile & Accessories': '📱', 'Fireworks & Crackers': '✨', 'Iron & Grill Suppliers': '⚒️', 'Clothing & Tailors': '👕',
+  'Carpentry Services': '🪚', 'AC Services': '❄️', 'Washing Machine Repair': '🧺', 'Event Caterers': '🍽️',
+  'WiFi & Internet Services': '📡', 'Tractor Mechanics': '🔧', 'MeeSeva Centers': '🏢', 'Aadhaar Centers': '🆔',
+  'Sachivalayams': '🏛️', 'Court & Legal Services': '⚖️', 'Electricity & Water Offices': '⚡', 'Sports Coaching': '⚽',
+  'Tuition Centers': '📖', 'Dance Academies': '💃', 'APSRTC Bus Stand': '🚌', 'Private Travels': '🚐',
+  'Railway Station': '🚂', 'Priests & Poojaris': '🙏', 'Swimming Pools': '🏊', 'Other Services': '⚙️',
+  'Ramayapatnam Beach': '🏖️', 'Pakala Lake': '🌊', 'Etha Mokkala': '⛰️', 'Chirala Beach': '🏖️', 'Insurance Offices': '📋',
+}
+
+const directPostingCategoryNames = new Set(['Real Estate', 'Rental Transport', 'Construction Materials', 'Buy & Sell'])
+
+// Map old category names to new subcategory names for backward compatibility
+const categoryNameMappings: Record<string, string[]> = {
+  'Finance & Utilities': ['Banks'],
+  'Banks & ATMs': ['Banks'],
+}
+
+const getSubcategoryIcon = (name: string) => {
+  const trimmed = (name || '').trim()
+  if (!trimmed) return '📌'
+  const exact = subcategoryIcons[trimmed]
+  if (exact) return exact
+  const normalized = trimmed.toLowerCase().replace(/\s+/g, ' ')
+  const match = Object.entries(subcategoryIcons).find(([key]) => key.toLowerCase().replace(/\s+/g, ' ') === normalized)
+  return match ? match[1] : '📌'
 }
 
 export default function Businesses({ navigation, route }: any) {
-  const { t, category: categoryLabel } = useLanguage()
+  const { t, category: categoryLabel, businessName } = useLanguage()
   const { favorites, toggleFavorite, isLoggedIn, user } = useAuth()
   const { getReviewStats } = useReviews()
   const { distances, ready, ensureAddresses, sortNearest, location } = useNearby()
   const { markSoldOut } = useSubmittedListings()
-  const { businesses, categories } = useDirectory()
-  const [showPropertyForm, setShowPropertyForm] = useState(false)
-  const [propertyForm, setPropertyForm] = useState({ name: '', phone: '', type: 'Direct owner', gadhulu: '', face: '', location: '' })
-  const [sortMode, setSortMode] = useState<'nearest' | 'rating' | 'newest'>('nearest')
+  const { businesses, categories, loading, error, retry } = useDirectory()
+  const [sortMode, setSortMode] = useState<'nearest' | 'rating' | 'newest'>('newest')
   const [minRating, setMinRating] = useState(0)
   const [distanceFilter, setDistanceFilter] = useState(20)
+  const [selectedBusinessId, setSelectedBusinessId] = useState<string | null>(null)
+  const [busRouteCount, setBusRouteCount] = useState<number | null>(null)
   const categoryId = route.params?.categoryId || null
   const category = categories.find(item => item.id === categoryId)
+  const parentCategory = categories.find(item => item.id === category?.parentId)
+  const supportsDirectPosting = Boolean(category && (directPostingCategoryNames.has(category.name) || directPostingCategoryNames.has(parentCategory?.name || '')))
+  const isBuyAndSellCategory = category?.name === 'Buy & Sell' || parentCategory?.name === 'Buy & Sell'
   const subcategoryIds = categoryId ? categories.filter(item => item.parentId === categoryId).map(item => item.id) : []
+  const mappedCategoryNames = category?.name ? (categoryNameMappings[category.name] || []) : []
+  const mappedCategoryIds = mappedCategoryNames.length > 0 ? categories.filter(item => mappedCategoryNames.includes(item.name)).map(item => item.id) : []
   const allBusinesses: any[] = businesses
   const selectedBusinesses: any[] = allBusinesses.filter(
-    business => !categoryId || business.categoryId === categoryId || subcategoryIds.includes(business.categoryId),
+    business => !categoryId || business.categoryId === categoryId || subcategoryIds.includes(business.categoryId) || mappedCategoryIds.includes(business.categoryId) || mappedCategoryNames.includes(business.categoryName),
   )
   const filteredBusinesses = selectedBusinesses.filter((business) => {
     const reviewStats = getReviewStats(business.id)
@@ -56,14 +99,24 @@ export default function Businesses({ navigation, route }: any) {
         return secondRating - firstRating
       })
     }
-    if (sortMode === 'newest') {
-      return cloned.sort((first, second) => (second.id > first.id ? 1 : -1))
-    }
+    if (sortMode === 'newest') return cloned.sort((first, second) => new Date(second.createdAt || 0).getTime() - new Date(first.createdAt || 0).getTime())
     return sortNearest(cloned)
   })()
   React.useEffect(() => { if (ready) ensureAddresses(selectedBusinesses.map((business) => ({ id: business.id, address: business.address, latitude: business.latitude, longitude: business.longitude }))) }, [selectedBusinesses.length, categoryId, ready])
 
   const childCategories = categories.filter(item => item.parentId === categoryId)
+  React.useEffect(() => {
+    if (category?.name !== 'Travel & Transport') {
+      setBusRouteCount(null)
+      return
+    }
+    let active = true
+    fetchJson<{ data: unknown[] }>('/api/bus-routes')
+      .then((response) => { if (active) setBusRouteCount(response.data.length) })
+      .catch(() => { if (active) setBusRouteCount(null) })
+    return () => { active = false }
+  }, [category?.name])
+
   if (childCategories.length > 0) {
     return (
       <View style={styles.container}>
@@ -74,29 +127,27 @@ export default function Businesses({ navigation, route }: any) {
         </View>
 
         <ScrollView contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}>
-          {category?.name === 'Real Estate' && <Pressable style={styles.sellPropertyButton} onPress={() => setShowPropertyForm(true)}><Text style={styles.sellPropertyIcon}>＋</Text><View><Text style={styles.sellPropertyTitle}>{t('Sell a property', 'ఆస్తిని అమ్మండి')}</Text><Text style={styles.sellPropertyCopy}>{t('Add plot, owner and location details', 'ప్లాట్, యజమాని మరియు ప్రదేశ వివరాలు జోడించండి')}</Text></View></Pressable>}
-          {childCategories.map(item => (
+          {childCategories.map(item => {
+            const mappedCategoryNames = categoryNameMappings[item.name] || []
+            const childCount = businesses.filter((business) => 
+              business.categoryId === item.id || 
+              mappedCategoryNames.includes(business.categoryName)
+            ).length
+            return (
             <Pressable
               key={item.id}
               style={styles.listRow}
-              onPress={() => navigation.navigate('Businesses', { categoryId: item.id })}
+              onPress={() => item.name === 'APSRTC Bus Stand'
+                ? navigation.navigate('BusTimetable')
+                : navigation.push('Businesses', { categoryId: item.id })}
             >
-              <View style={styles.subcategoryIcon}><Text style={styles.subcategoryIconText}>{subcategoryIcons[item.name] || '📌'}</Text></View>
-              <View style={styles.subcategoryCopy}><Text style={styles.listRowText}>{categoryLabel(item.name)}</Text><Text style={styles.subcategoryCount}>{businesses.filter((business) => business.categoryId === item.id).length} {t('Listings', 'లిస్టింగ్‌లు')}</Text></View>
+              <View style={styles.subcategoryIcon}><Text style={styles.subcategoryIconText}>{getSubcategoryIcon(item.name)}</Text></View>
+              <View style={styles.subcategoryCopy}><Text style={styles.listRowText}>{categoryLabel(item.name)}</Text><Text style={styles.subcategoryCount}>{item.name === 'APSRTC Bus Stand' && busRouteCount !== null ? busRouteCount : childCount} {t('Listings', 'లిస్టింగ్‌లు')}</Text></View>
               <Text style={styles.listArrow}>›</Text>
             </Pressable>
-          ))}
+            )
+          })}
         </ScrollView>
-        <Modal visible={showPropertyForm} transparent animationType="slide" onRequestClose={() => setShowPropertyForm(false)}>
-          <View style={styles.formBackdrop}><View style={styles.propertyForm}>
-            <View style={styles.formHeader}><Text style={styles.formTitle}>{t('Sell a property', 'ఆస్తిని అమ్మండి')}</Text><Pressable onPress={() => setShowPropertyForm(false)}><Text style={styles.formClose}>×</Text></Pressable></View>
-            {([
-              ['name', t('Name', 'పేరు')], ['phone', t('Mobile number', 'మొబైల్ నంబర్')], ['location', t('Location', 'ప్రదేశం')], ['gadhulu', t('No. of gadhulu', 'గదుల సంఖ్య')], ['face', t('Plot face', 'ప్లాట్ ముఖదిశ')],
-            ] as const).map(([field, label]) => <TextInput key={field} style={styles.formInput} placeholder={label} placeholderTextColor="#777" value={propertyForm[field]} onChangeText={(value) => setPropertyForm((current) => ({ ...current, [field]: value }))} />)}
-            <Text style={styles.formLabel}>{t('Seller type', 'విక్రేత రకం')}</Text><View style={styles.typeOptions}>{(['Direct owner', 'Agent'] as const).map((type) => <Pressable key={type} style={[styles.typeOption, propertyForm.type === type && styles.typeOptionActive]} onPress={() => setPropertyForm((current) => ({ ...current, type }))}><Text style={styles.typeOptionText}>{t(type, type === 'Agent' ? 'ఏజెంట్' : 'ప్రత్యక్ష యజమాని')}</Text></Pressable>)}</View>
-            <Pressable style={styles.formSubmit} onPress={() => { setShowPropertyForm(false); Alert.alert(t('Submitted', 'సమర్పించబడింది'), t('Your property will be reviewed before publishing.', 'ప్రచురించే ముందు మీ ఆస్తి వివరాలను పరిశీలిస్తాము.')) }}><Text style={styles.formSubmitText}>{t('Submit property', 'ఆస్తిని సమర్పించండి')}</Text></Pressable>
-          </View></View>
-        </Modal>
         <BottomNav navigation={navigation} active="Categories" />
       </View>
     )
@@ -108,10 +159,11 @@ export default function Businesses({ navigation, route }: any) {
       <View style={styles.subHeader}>
         <Pressable style={styles.headerBack} onPress={() => navigation.goBack()}><Text style={styles.headerBackText}>←</Text></Pressable>
         <View style={styles.headerCopy}><Text style={styles.headerKicker}>{t('DIRECTORY', 'డైరెక్టరీ')}</Text><Text style={styles.headerTitle}>{categoryLabel(category?.name || t('All Listings', 'అన్ని లిస్టింగ్‌లు'))}</Text></View>
-        <Text style={styles.headerCount}>{selectedBusinesses.length} {t('Listings', 'లిస్టింగ్‌లు')}</Text>
+        {supportsDirectPosting ? <Pressable style={styles.postButton} onPress={() => navigation.navigate('SubmitBusiness', { categoryId })}><Text style={styles.postButtonText}>+</Text></Pressable> : <Text style={styles.headerCount}>{selectedBusinesses.length} {t('Listings', 'లిస్టింగ్‌లు')}</Text>}
       </View>
 
       <ScrollView contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}>
+        <DirectoryState loading={loading} error={error} onRetry={retry} />
         <View style={styles.filterBar}>
           <View style={styles.filterChipRow}>
             {(['nearest', 'rating', 'newest'] as const).map((mode) => (
@@ -122,30 +174,31 @@ export default function Businesses({ navigation, route }: any) {
           </View>
           <View style={styles.sliderRow}>
             <Text style={styles.sliderLabel}>{t('Min rating', 'కనిష్ఠ రేటింగ్')}: {minRating.toFixed(1)}</Text>
-            <TextInput value={String(minRating)} keyboardType="numeric" onChangeText={(value) => setMinRating(Math.min(5, Math.max(0, Number(value || 0))))} style={styles.sliderInput} />
+            <FocusTextInput value={String(minRating)} keyboardType="numeric" onChangeText={(value) => setMinRating(Math.min(5, Math.max(0, Number(value || 0))))} style={styles.sliderInput} />
           </View>
           <View style={styles.sliderRow}>
             <Text style={styles.sliderLabel}>{t('Distance limit', 'దూర పరిమితి')}: {distanceFilter} km</Text>
-            <TextInput value={String(distanceFilter)} keyboardType="numeric" onChangeText={(value) => setDistanceFilter(Math.min(100, Math.max(1, Number(value || 1))))} style={styles.sliderInput} />
+            <FocusTextInput value={String(distanceFilter)} keyboardType="numeric" onChangeText={(value) => setDistanceFilter(Math.min(100, Math.max(1, Number(value || 1))))} style={styles.sliderInput} />
           </View>
         </View>
         {orderedBusinesses.map((business) => (
           <Pressable
             key={business.id}
             style={styles.card}
-            onPress={() => navigation.navigate('BusinessDetails', { id: business.id })}
+            onPress={() => { setSelectedBusinessId(business.id); navigation.navigate('BusinessDetails', { id: business.id }) }}
           >
-            <View style={styles.cardMain}><View style={styles.businessImageWrap}><Image source={getBusinessImage(business.image, business.categoryName)} style={styles.businessImage} resizeMode="cover" /></View>
+            <View style={styles.cardMain}><View style={[styles.businessImageWrap, selectedBusinessId === business.id && styles.businessImageWrapSelected]}><RemoteImage source={getBusinessImage(business.image, business.categoryName)} style={styles.businessImage} resizeMode="cover" /></View>
             <View style={styles.cardBody}>
-              <View style={styles.cardTitleRow}><Text style={styles.cardTitle}>{business.name}</Text><Pressable onPress={() => isLoggedIn ? toggleFavorite(business.id) : navigation.navigate('Profile')}><Text style={styles.favorite}>{favorites.includes(business.id) ? '♥' : '♡'}</Text></Pressable><Pressable onPress={() => Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(business.address)}`)}><Text style={styles.pin}>📍</Text></Pressable></View>
+              <View style={styles.cardTitleRow}><Text style={styles.cardTitle}>{businessName(business.name, business.nameTe)}</Text><Pressable style={styles.cardIconButton} onPress={() => isLoggedIn ? toggleFavorite(business.id) : navigation.navigate('Profile')}><Text style={styles.favorite}>{favorites.includes(business.id) ? '♥' : '♡'}</Text></Pressable><Pressable style={styles.cardIconButton} onPress={() => Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(business.address)}`)}><Text style={styles.pin}>📍</Text></Pressable></View>
               <View style={styles.ratingRow}><Text style={styles.rating}>{getReviewStats(business.id).rating.toFixed(1)}</Text><Text style={styles.stars}>★★★★★</Text><Text style={styles.reviews}>({getReviewStats(business.id).count})</Text><Text style={styles.typePill}>{categoryLabel(business.categoryName)}</Text></View>
-              <Text style={styles.cardPhone}>{business.phone || 'N/A'}</Text>
-              <Text style={[styles.openStatus, business.status === 'Sold out' && styles.soldOutStatus]}>{business.status === 'Sold out' ? t('Sold out', 'అమ్ముడైంది') : business.status === 'Pending review' ? t('Pending review', 'సమీక్షలో ఉంది') : t('Open · Closes 10 pm', 'తెరిచి ఉంది · రాత్రి 10కి మూసివేస్తుంది')}</Text>
+              {supportsDirectPosting && <><Text style={styles.marketplacePrice}>Price: {business.price || 'Not specified'}</Text><Text style={styles.marketplaceRooms}>{isBuyAndSellCategory ? 'Seller' : 'Owner / agent'}: {business.phone}</Text>{business.facing ? <Text style={styles.marketplaceRooms}>Facing: {business.facing}</Text> : null}</>}
+              {!supportsDirectPosting && <Text style={styles.cardPhone}>{business.phone || 'N/A'}</Text>}
+              {business.status === 'Sold out' && <Text style={[styles.openStatus, styles.soldOutStatus]}>{t('Sold out', 'అమ్ముడైంది')}</Text>}
               <Text style={styles.cardAddress}>{business.address}</Text>
-              <Text style={styles.cardDistance}>{(distances[business.id] ?? distances[business.address]) !== undefined ? `📍 ${((distances[business.id] ?? distances[business.address]) as number).toFixed(1)} km away` : '📍 Finding distance…'}</Text>
+              <Text style={styles.cardDistance}>{(distances[business.id] ?? distances[business.address]) !== undefined ? `📍 ${((distances[business.id] ?? distances[business.address]) as number).toFixed(1)} ${t('km away', 'కి.మీ దూరంలో')}` : `📍 ${t('Finding distance…', 'దూరాన్ని కనుగొంటున్నాము…')}`}</Text>
               <Text style={styles.cardDescription} numberOfLines={3}>{business.description}</Text>
             </View></View>
-            <View style={styles.cardActions}><Pressable style={styles.directionButton} onPress={() => Linking.openURL(buildGoogleMapsDirectionsUrl({ latitude: business.latitude, longitude: business.longitude }, location ?? undefined))}><Text style={styles.directionText}>{t('Directions', 'దిశలు')}</Text></Pressable><Pressable style={styles.websiteButton} onPress={() => business.website && business.website !== 'N/A' ? Linking.openURL(business.website) : Alert.alert(t('Website unavailable', 'వెబ్‌సైట్ అందుబాటులో లేదు'), t('This listing does not have a website.', 'ఈ లిస్టింగ్‌కు వెబ్‌సైట్ లేదు.'))}><Text style={styles.websiteText}>{t('Website', 'వెబ్‌సైట్')}</Text></Pressable>{business.submittedBy === user?.name && business.status !== 'Sold out' && <Pressable style={styles.soldOutButton} onPress={() => markSoldOut(business.id)}><Text style={styles.soldOutText}>{t('Mark sold out', 'అమ్ముడైనట్లు గుర్తించండి')}</Text></Pressable>}</View>
+            <View style={styles.cardActions}><Pressable style={styles.directionButton} onPress={() => Linking.openURL(buildGoogleMapsDirectionsUrl({ latitude: business.latitude, longitude: business.longitude, address: business.address }, location ?? undefined))}><Text style={styles.directionText}>{t('Directions', 'దిశలు')}</Text></Pressable><Pressable style={styles.websiteButton} onPress={() => business.website && business.website !== 'N/A' ? Linking.openURL(business.website) : Alert.alert(t('Website unavailable', 'వెబ్‌సైట్ అందుబాటులో లేదు'), t('This listing does not have a website.', 'ఈ లిస్టింగ్‌కు వెబ్‌సైట్ లేదు.'))}><Text style={styles.websiteText}>{t('Website', 'వెబ్‌సైట్')}</Text></Pressable>{business.submittedBy === user?.phone && business.status !== 'Sold out' && <Pressable style={styles.soldOutButton} onPress={() => markSoldOut(business.id)}><Text style={styles.soldOutText}>{t('Mark sold out', 'అమ్ముడైనట్లు గుర్తించండి')}</Text></Pressable>}</View>
           </Pressable>
         ))}
 
@@ -163,61 +216,52 @@ export default function Businesses({ navigation, route }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#EAEAF9',
+    backgroundColor: colors.background,
   },
-  subHeader: { minHeight: 80, paddingHorizontal: 14, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A4AD5' },
-  headerBack: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', marginRight: 12, borderRadius: 21, backgroundColor: 'rgba(255,255,255,0.18)' },
-  headerBackText: { color: '#FFF', fontSize: 24, lineHeight: 27, textAlign: 'center' },
+  subHeader: { minHeight: 72, paddingHorizontal: 14, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', backgroundColor: '#EFEAFE' },
+  headerBack: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginRight: 10, borderRadius: 18, backgroundColor: '#E1D9FF' },
+  headerBackText: { color: '#4A4AD5', fontSize: 22, lineHeight: 24, textAlign: 'center' },
   kicker: {
-    color: '#D7D9FF',
-    fontSize: 12,
-    fontWeight: '700',
+    color: '#5B52D1',
+    fontSize: 10,
+    fontWeight: '800',
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
   headerTitle: {
-    color: '#FFF',
+    color: '#2F2F43',
     marginTop: 0,
-    fontSize: 30,
+    fontSize: 22,
     fontWeight: '800',
-    letterSpacing: -0.8,
-    lineHeight: 46,
+    letterSpacing: -0.4,
+    lineHeight: 28,
   },
   headerCopy: { flex: 1 },
-  headerKicker: { color: '#D7D9FF', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
-  headerCount: { color: '#FFF', fontSize: 11, fontWeight: '800', marginLeft: 8 },
+  headerKicker: { color: '#5B52D1', fontSize: 9, fontWeight: '800', letterSpacing: 1 },
+  headerCount: { color: '#4A4AD5', fontSize: 11, fontWeight: '800', marginLeft: 8 },
+  postButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: '#514BD5' },
+  postButtonText: { color: '#FFFFFF', fontSize: 25, fontWeight: '500', lineHeight: 28 },
   listContent: {
     paddingHorizontal: 18,
     paddingTop: 20,
     paddingBottom: 110,
   },
-  sellPropertyButton: { flexDirection: 'row', alignItems: 'center', padding: 14, marginBottom: 14, borderRadius: 14, borderWidth: 1, borderColor: '#E5B8A8', backgroundColor: '#FFF2EA' },
-  sellPropertyIcon: { width: 38, height: 38, marginRight: 12, borderRadius: 19, color: '#C95E49', backgroundColor: '#FFE1D1', fontSize: 25, lineHeight: 36, textAlign: 'center' },
-  sellPropertyTitle: { color: '#A84F3E', fontSize: 16, fontWeight: '800' },
-  sellPropertyCopy: { marginTop: 3, color: '#75615B', fontSize: 11 },
-  formBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(25,24,25,0.58)' },
-  propertyForm: { padding: 20, borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: '#FFFDFB' },
-  formHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  formTitle: { color: '#302C2A', fontSize: 21, fontWeight: '800' },
-  formClose: { color: '#5C5A57', fontSize: 28 },
-  formInput: { minHeight: 44, marginTop: 10, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#DDD6D1', color: '#302C2A', backgroundColor: '#FFFCFA' },
-  formLabel: { marginTop: 14, color: '#5C554F', fontSize: 12, fontWeight: '800' },
-  typeOptions: { flexDirection: 'row', gap: 10, marginTop: 8 },
-  typeOption: { flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#DDD6D1' },
-  typeOptionActive: { borderColor: '#D35B50', backgroundColor: '#FFF0E9' },
-  typeOptionText: { color: '#5C554F', fontSize: 12, fontWeight: '700' },
-  formSubmit: { marginTop: 18, alignItems: 'center', paddingVertical: 13, borderRadius: 8, backgroundColor: '#514BD5' },
-  formSubmitText: { color: '#FFF', fontSize: 14, fontWeight: '800' },
   card: {
-    padding: 12,
+    padding: 11,
     marginBottom: 16,
-    borderRadius: 14,
-    backgroundColor: '#F7F8FF',
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.82)',
     borderWidth: 1,
-    borderColor: '#DDE2F5',
+    borderColor: 'rgba(255,255,255,0.75)',
+    shadowColor: '#8C5B4B',
+    shadowOpacity: 0.08,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   cardMain: { flexDirection: 'row', alignItems: 'flex-start' },
-  businessImageWrap: { width: 98, height: 98, borderRadius: 12, overflow: 'hidden', backgroundColor: '#E7E9FA', marginRight: 12 },
+  businessImageWrap: { width: 128, height: 148, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: '#E9E3EA', backgroundColor: '#F7F4F8', marginRight: 12 },
+  businessImageWrapSelected: { borderWidth: 2, borderColor: '#514BD5' },
   businessImage: { width: '100%', height: '100%' },
   cardIconWrap: {
     width: 52,
@@ -236,8 +280,9 @@ const styles = StyleSheet.create({
   cardBody: {
     flex: 1,
   },
-  cardTitleRow: { flexDirection: 'row', alignItems: 'flex-start' },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 5 },
   cardTitle: {
+    flex: 1,
     color: '#202332',
     fontSize: 16,
     fontWeight: '800',
@@ -249,13 +294,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
-  favorite: { color: '#E4585D', fontSize: 22, marginLeft: 4 },
-  pin: { fontSize: 17, marginLeft: 5 },
+  cardIconButton: { width: 30, height: 30, flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: 8, borderWidth: 1, borderColor: '#E9E3EA', backgroundColor: '#FFFFFF' },
+  favorite: { color: '#E4585D', fontSize: 19, lineHeight: 22 },
+  pin: { fontSize: 15, lineHeight: 19 },
   ratingRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', marginTop: 7, gap: 4 },
   rating: { color: '#D89B00', fontSize: 12, fontWeight: '800' },
   stars: { color: '#D89B00', fontSize: 11 },
   reviews: { color: '#5E5A5A', fontSize: 11 },
-  typePill: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 9, color: '#C95E49', backgroundColor: '#FFF0E9', fontSize: 9, fontWeight: '800' },
+  typePill: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: '#F0DCD4', color: '#B85845', backgroundColor: '#FFF8F5', fontSize: 9, fontWeight: '800' },
   filterBar: { marginBottom: 18, padding: 10, borderRadius: 12, backgroundColor: '#FFFDFB', borderWidth: 1, borderColor: '#E5E5F2' },
   filterChipRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   filterChip: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: '#F0F2FF', borderWidth: 1, borderColor: '#D9DDF8' },
@@ -266,6 +312,9 @@ const styles = StyleSheet.create({
   sliderLabel: { color: '#4F4F5F', fontSize: 12, fontWeight: '700' },
   sliderInput: { width: 80, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: '#DCE0F2', backgroundColor: '#F7F8FF', color: '#2D2F43', textAlign: 'center' },
   cardPhone: { marginTop: 5, color: '#636B82', fontSize: 11 },
+  marketplaceOwner: { marginTop: 6, color: '#3F4154', fontSize: 11, fontWeight: '700' },
+  marketplacePrice: { marginTop: 3, color: '#4D8052', fontSize: 12, fontWeight: '800' },
+  marketplaceRooms: { marginTop: 3, color: '#636B82', fontSize: 11 },
   openStatus: { marginTop: 4, color: '#4D8052', fontSize: 11, fontWeight: '800' },
   soldOutStatus: { color: '#C4515B' },
   cardAddress: {
@@ -282,34 +331,40 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     marginLeft: 8,
   },
-  cardActions: { flexDirection: 'row', gap: 10, marginTop: 12 },
-  directionButton: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 9, borderWidth: 1, borderColor: '#B8D4FF', backgroundColor: '#F4F8FF' },
-  directionText: { color: '#236CE8', fontSize: 13, fontWeight: '800' },
-  websiteButton: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 9, borderWidth: 1, borderColor: '#E3D8D3', backgroundColor: '#FFFDFB' },
+  cardActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F0EBF1' },
+  directionButton: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#AAA4E8', backgroundColor: '#FFFFFF' },
+  directionText: { color: '#514BD5', fontSize: 12, fontWeight: '800' },
+  websiteButton: { flex: 1, minHeight: 38, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#E3DCE5', backgroundColor: '#FFFFFF' },
   websiteText: { color: '#302C2A', fontSize: 13, fontWeight: '800' },
-  soldOutButton: { flexBasis: '100%', alignItems: 'center', paddingVertical: 9, borderRadius: 9, backgroundColor: '#FFF0E9' },
+  soldOutButton: { flexBasis: '100%', minHeight: 38, alignItems: 'center', justifyContent: 'center', paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#F0DCD4', backgroundColor: '#FFF8F5' },
   soldOutText: { color: '#C4515B', fontSize: 12, fontWeight: '800' },
   listRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 15,
+    minHeight: 86,
+    paddingVertical: 14,
     paddingHorizontal: 16,
     marginBottom: 12,
-    borderRadius: 12,
-    backgroundColor: '#F8F9FF',
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.82)',
     borderWidth: 1,
-    borderColor: '#DDE2F5',
+    borderColor: 'rgba(255,255,255,0.75)',
+    shadowColor: '#545C7A',
+    shadowOpacity: 0.06,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   listRowText: {
     flex: 1,
     color: '#1F2235',
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '800',
-    lineHeight: 23,
+    lineHeight: 26,
   },
-  subcategoryIcon: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center', marginRight: 14, borderRadius: 14, backgroundColor: '#F8E8DE' },
+  subcategoryIcon: { width: 52, height: 52, alignItems: 'center', justifyContent: 'center', marginRight: 14, borderRadius: 14, backgroundColor: '#F8E8DE', borderWidth: 1, borderColor: '#EAD6C6' },
   subcategoryIconText: { fontSize: 25 },
-  subcategoryCopy: { flex: 1 },
+  subcategoryCopy: { flex: 1, justifyContent: 'center' },
   subcategoryCount: { marginTop: 4, color: '#6D7288', fontSize: 12, fontWeight: '700' },
   listArrow: {
     color: '#2A2B3A',

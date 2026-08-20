@@ -32,6 +32,8 @@ export function NearbyProvider({ children }: { children: React.ReactNode }) {
   const addressCacheRef = useRef(addressCache)
   const distancesRef = useRef(distances)
 
+  const fallbackOrigin: Coordinates = { latitude: 15.2154, longitude: 79.9072 }
+
   useEffect(() => { originRef.current = origin }, [origin])
   useEffect(() => { addressCacheRef.current = addressCache }, [addressCache])
   useEffect(() => { distancesRef.current = distances }, [distances])
@@ -62,61 +64,51 @@ export function NearbyProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   useEffect(() => {
-    if (!origin || Object.keys(addressCacheRef.current).length === 0) return
+    if (!origin && !addressCacheRef.current) return
+    const currentOrigin = origin ?? fallbackOrigin
     const nextDistances = { ...distancesRef.current }
-    Object.entries(addressCacheRef.current).forEach(([address, coordinates]) => {
-      nextDistances[address] = distanceInKm(origin, coordinates)
+    Object.entries(addressCacheRef.current).forEach(([key, coordinates]) => {
+      if (!coordinates) return
+      const distance = distanceInKm(currentOrigin, coordinates)
+      nextDistances[key] = distance
     })
     distancesRef.current = nextDistances
     setDistances(nextDistances)
   }, [origin])
 
   const ensureAddresses = useCallback((addresses: Array<string | { id: string; address: string; latitude?: number | null; longitude?: number | null }>) => {
-    const currentOrigin = originRef.current
-    if (!currentOrigin) return
+    const currentOrigin = originRef.current ?? fallbackOrigin
 
     const entries = addresses.map((entry) => typeof entry === 'string' ? { id: entry, address: entry } : entry)
-    const unique = entries.filter((entry) => Boolean(entry.address) && !addressCacheRef.current[entry.id])
+    const unique = entries.filter((entry) => {
+      if (!entry.address) return false
+      const idKey = entry.id ?? entry.address
+      return !addressCacheRef.current[idKey] && !addressCacheRef.current[entry.address]
+    })
     if (unique.length === 0) return
 
     Promise.all(unique.map(async (entry) => {
       if (entry.latitude != null && entry.longitude != null) {
-        return { ...entry, coordinates: { latitude: entry.latitude, longitude: entry.longitude } }
+        return { id: entry.id, address: entry.address, coordinates: { latitude: entry.latitude, longitude: entry.longitude } }
       }
-      return { ...entry, coordinates: await geocodeAddress(entry.address) }
+      return { id: entry.id, address: entry.address, coordinates: await geocodeAddress(entry.address) }
     }))
       .then((results) => {
         const nextCache = { ...addressCacheRef.current }
         const nextDistances = { ...distancesRef.current }
         results.forEach(({ id, address, coordinates }) => {
           if (!coordinates) return
-          nextCache[id] = coordinates
-          nextDistances[id] = distanceInKm(currentOrigin, coordinates)
-          nextDistances[address] = nextDistances[id]
+          const key = id || address
+          nextCache[key] = coordinates
+          nextCache[address] = coordinates
+          const distance = distanceInKm(currentOrigin, coordinates)
+          nextDistances[key] = distance
+          nextDistances[address] = distance
         })
         setAddressCache(nextCache)
         setDistances(nextDistances)
       })
       .catch(() => undefined)
-  }, [])
-
-  const ensureBusinessCoordinates = useCallback((businesses: Array<{ id: string; address: string; latitude?: number | null; longitude?: number | null }>) => {
-    const currentOrigin = originRef.current
-    if (!currentOrigin) return
-
-    businesses.forEach((business) => {
-      if (business.latitude != null && business.longitude != null) {
-        const nextCache = { ...addressCacheRef.current }
-        const nextDistances = { ...distancesRef.current }
-        nextCache[business.id] = { latitude: business.latitude, longitude: business.longitude }
-        nextDistances[business.id] = distanceInKm(currentOrigin, { latitude: business.latitude, longitude: business.longitude })
-        nextDistances[business.address] = nextDistances[business.id]
-        addressCacheRef.current = nextCache
-        distancesRef.current = nextDistances
-        setAddressCache(nextCache)
-        setDistances(nextDistances)
-      }
-    })
   }, [])
 
   const sortNearest = useCallback(<T extends { id: string; address: string }>(items: T[]) => items.slice().sort((first, second) => {

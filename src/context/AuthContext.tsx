@@ -5,7 +5,7 @@ import { fetchJson } from '../services/api';
 export type UserProfile = {
   name: string;
   phone: string;
-  role?: 'user' | 'super_admin';
+  role?: 'user' | 'admin' | 'super_admin';
   isSuperAdmin?: boolean;
 };
 
@@ -78,7 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(profile),
     });
-    const favoritesResponse = await fetchJson<{ data: string[] }>(`/api/users/${response.data.phone}/favorites`);
+    const favoritesResponse = await fetchJson<{ data: string[] }>(`/api/users/${response.data.phone}/favorites`, undefined, response.data.phone);
     setUser(response.data);
     setFavorites(favoritesResponse.data);
     return response.data;
@@ -91,7 +91,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const toggleFavorite = async (businessId: string) => {
     if (!user) return;
-    const response = await fetchJson<{ data: string[] }>(`/api/users/${user.phone}/favorites/${encodeURIComponent(businessId)}`, { method: 'PUT' });
+    const response = await fetchJson<{ data: string[] }>(`/api/users/${user.phone}/favorites/${encodeURIComponent(businessId)}`, { method: 'PUT' }, user.phone);
     setFavorites(response.data);
   };
 
@@ -99,7 +99,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user,
     favorites,
     isLoggedIn: !!user,
-    isSuperAdmin: Boolean(user?.isSuperAdmin || user?.role === 'super_admin'),
+    isSuperAdmin: Boolean(user?.isSuperAdmin || user?.role === 'admin' || user?.role === 'super_admin'),
     login,
     logout,
     toggleFavorite,

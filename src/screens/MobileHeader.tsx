@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
@@ -15,6 +15,18 @@ export default function MobileHeader({ navigation }: { navigation: any }) {
   const isCompact = width < 430
   const [showNotifications, setShowNotifications] = useState(false)
   const [selectedNotification, setSelectedNotification] = useState<typeof notifications[number] | null>(null)
+  const previousNotificationCount = useRef(notifications.length)
+
+  useEffect(() => {
+    if (showNotifications && previousNotificationCount.current > 0 && notifications.length === 0) {
+      setShowNotifications(false)
+      setSelectedNotification(null)
+    }
+    if (selectedNotification && !notifications.some((notification) => notification.id === selectedNotification.id)) {
+      setSelectedNotification(null)
+    }
+    previousNotificationCount.current = notifications.length
+  }, [notifications, selectedNotification, showNotifications])
 
   return (
     <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
@@ -45,13 +57,13 @@ export default function MobileHeader({ navigation }: { navigation: any }) {
         </View>
         <Pressable style={styles.profileButton} onPress={() => navigation.navigate('Profile')}>
           <Text style={styles.profileText}>👤</Text>
-          {!isCompact && <Text style={styles.profileName}>{user?.name?.split(' ')[0] || t('Login', 'లాగిన్')}</Text>}
+          <Text style={styles.profileName} numberOfLines={1}>{user?.name?.split(' ')[0] || t('Login', 'లాగిన్')}</Text>
         </Pressable>
         <Pressable
           style={styles.notificationButton}
           hitSlop={12}
           accessibilityRole="button"
-          accessibilityLabel="Open notifications"
+          accessibilityLabel={t('Open notifications', 'నోటిఫికేషన్‌లను తెరవండి')}
           onPress={() => setShowNotifications(true)}
         >
           <Text style={styles.bell}>🔔</Text>
@@ -73,7 +85,7 @@ export default function MobileHeader({ navigation }: { navigation: any }) {
               </View>
             </View>
             <ScrollView style={styles.notificationList} contentContainerStyle={styles.notificationListContent}>
-              {notifications.length === 0 ? <Text style={styles.emptyNotifications}>No new notifications.</Text> : notifications.map((notification, index) => (
+              {notifications.length === 0 ? <Text style={styles.emptyNotifications}>{t('No new notifications.', 'కొత్త నోటిఫికేషన్‌లు లేవు.')}</Text> : notifications.map((notification, index) => (
                 <Pressable
                   key={`${notification.title}-${index}`}
                   style={styles.notificationCard}
@@ -92,15 +104,17 @@ export default function MobileHeader({ navigation }: { navigation: any }) {
       <Modal visible={selectedNotification !== null} transparent animationType="fade" onRequestClose={() => setSelectedNotification(null)}>
         <View style={styles.notificationBackdrop}>
           {selectedNotification && (
-            <View style={styles.updateModal}>
-              <View style={styles.updateModalTop}>
-                <Text style={styles.updateBadge}>Update</Text>
+            <View style={styles.announcementModal}>
+              {selectedNotification.image ? <Image source={{ uri: selectedNotification.image }} style={styles.announcementImage} resizeMode="cover" /> : null}
+              <View style={styles.announcementBody}>
+                <View style={styles.updateModalTop}>
+                <Text style={styles.updateBadge}>{selectedNotification.type}</Text>
                 <Pressable style={styles.updateClose} onPress={() => setSelectedNotification(null)}><Text style={styles.updateCloseText}>×</Text></Pressable>
               </View>
-              <Text style={styles.updateTitle}>{selectedNotification.title}</Text>
-              <Text style={styles.updateMeta}>{selectedNotification.time}</Text>
-              <Text style={styles.updateDescription}>{selectedNotification.message}</Text>
-              <Text style={styles.updateSource}>{selectedNotification.title}</Text>
+              <Text style={styles.updateTitle}>{selectedNotification.announcementTitle}</Text>
+              <Text style={styles.updateMeta}>{selectedNotification.detail}</Text>
+              <Text style={styles.updateDescription}>{selectedNotification.description}</Text>
+              </View>
             </View>
           )}
         </View>
@@ -110,26 +124,26 @@ export default function MobileHeader({ navigation }: { navigation: any }) {
 }
 
 const styles = StyleSheet.create({
-  header: { position: 'relative', zIndex: 10, minHeight: 70, paddingBottom: 8, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', backgroundColor: '#B67870' },
-  brandBlock: { flex: 1, minWidth: 105, flexDirection: 'row', alignItems: 'center', marginRight: 2 },
-  mark: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginRight: 7, backgroundColor: 'rgba(255,255,255,0.22)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)' },
-  markText: { color: '#FFF', fontSize: 17, fontWeight: '800' },
+  header: { position: 'relative', zIndex: 10, minHeight: 62, paddingBottom: 8, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', backgroundColor: '#B088C8' },
+  brandBlock: { flex: 1, minWidth: 105, flexDirection: 'row', alignItems: 'center', marginRight: 4 },
+  mark: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginRight: 7, backgroundColor: 'rgba(255,255,255,0.20)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
+  markText: { color: '#FFF', fontSize: 18, fontWeight: '800' },
   brandCopy: { flexShrink: 1, minWidth: 0 },
-  brand: { flexShrink: 1, maxWidth: 110, color: '#FFF', fontSize: 15, lineHeight: 18, fontWeight: '800' },
-  agriStrip: { flexDirection: 'row', gap: 4, marginTop: 4 },
-  agriItem: { width: 19, height: 19, borderRadius: 10, overflow: 'hidden', textAlign: 'center', fontSize: 11, lineHeight: 19, backgroundColor: 'rgba(255,255,255,0.2)' },
-  actions: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 2 },
-  agriImage: { width: 31, height: 31, borderRadius: 10 },
-  languageToggle: { flexDirection: 'row', padding: 1, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.16)' },
-  language: { paddingHorizontal: 5, paddingVertical: 6, borderRadius: 10 },
-  activeLanguage: { backgroundColor: '#FFF4EC' },
-  languageText: { color: '#FFF', fontSize: 11, fontWeight: '800' },
-  activeLanguageText: { color: '#9A5545' },
-  profileButton: { maxWidth: 76, minWidth: 64, height: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.2)' },
-  profileText: { color: '#FFF', fontSize: 15, marginRight: 3 },
-  profileName: { maxWidth: 49, color: '#FFF', fontSize: 9, fontWeight: '800' },
-  notificationButton: { position: 'relative', width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)', backgroundColor: 'rgba(55,42,30,0.28)' },
-  bell: { color: '#FFF', fontSize: 19 },
+  brand: { flexShrink: 1, maxWidth: 104, color: '#FFF', fontSize: 17, lineHeight: 20, fontWeight: '800' },
+  agriStrip: { flexDirection: 'row', marginTop: 4 },
+  agriItem: { width: 18, height: 18, borderRadius: 9, overflow: 'hidden', textAlign: 'center', fontSize: 10, lineHeight: 18, marginRight: 4, backgroundColor: 'rgba(255,255,255,0.18)' },
+  actions: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  agriImage: { width: 30, height: 30, borderRadius: 10, marginRight: 6 },
+  languageToggle: { flexDirection: 'row', gap: 4 },
+  language: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 7, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#E9E3EA', backgroundColor: '#FFFFFF' },
+  activeLanguage: { borderColor: '#8B82E8', backgroundColor: '#FAF9FF' },
+  languageText: { color: '#686071', fontSize: 11, fontWeight: '800' },
+  activeLanguageText: { color: '#514BD5' },
+  profileButton: { maxWidth: 82, minWidth: 64, height: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 7, borderRadius: 9, borderWidth: 1, borderColor: '#E9E3EA', backgroundColor: '#FFFFFF', shadowColor: '#35283A', shadowOpacity: 0.08, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 2 },
+  profileText: { fontSize: 15, marginRight: 4 },
+  profileName: { maxWidth: 51, color: '#625A68', fontSize: 11, fontWeight: '800' },
+  notificationButton: { position: 'relative', width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 9, borderWidth: 1, borderColor: '#E9E3EA', backgroundColor: '#FFFFFF', shadowColor: '#35283A', shadowOpacity: 0.08, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 2 },
+  bell: { fontSize: 18 },
   notificationDot: { position: 'absolute', top: 5, right: 5, width: 7, height: 7, borderRadius: 4, backgroundColor: '#FF4F5E', borderWidth: 1, borderColor: '#FFF' },
   notificationBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 16, backgroundColor: 'rgba(25, 24, 25, 0.58)' },
   notificationPanel: { width: '100%', maxWidth: 440, maxHeight: '82%', padding: 16, borderRadius: 22, backgroundColor: '#FFFDFB' },
@@ -147,7 +161,9 @@ const styles = StyleSheet.create({
   notificationCardMessage: { marginTop: 5, color: '#5D554F', fontSize: 12, lineHeight: 17 },
   notificationCardTime: { marginTop: 8, color: '#8A7C73', fontSize: 11 },
   emptyNotifications: { padding: 24, color: '#77716D', fontSize: 13, textAlign: 'center' },
-  updateModal: { width: '100%', maxWidth: 420, padding: 20, borderRadius: 22, backgroundColor: '#FFFDFB' },
+  announcementModal: { width: '100%', maxWidth: 420, overflow: 'hidden', borderRadius: 22, backgroundColor: '#FFFDFB' },
+  announcementImage: { width: '100%', height: 210, backgroundColor: '#222' },
+  announcementBody: { padding: 20 },
   updateModalTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   updateBadge: { paddingHorizontal: 9, paddingVertical: 5, borderRadius: 12, color: '#42647D', backgroundColor: '#DDF0FA', fontSize: 11, fontWeight: '800' },
   updateClose: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: '#F3F0EB' },
