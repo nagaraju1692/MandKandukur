@@ -9,10 +9,10 @@
     ],
     "icon": "./src/assets/manakundur-app-icon-square.png",
     "sdkVersion": "54.0.0",
-    "version": "1.0.0",
+    "version": "1.0.6",
     "android": {
       "package": "com.manakandukur.directory",
-      "versionCode": 1
+      "versionCode": 7
     },
     "extra": {
       "eas": {
