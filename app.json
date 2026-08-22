@@ -9,15 +9,26 @@
     ],
     "icon": "./src/assets/manakundur-app-icon-square.png",
     "sdkVersion": "54.0.0",
-        "version": "1.0.7",
+    "version": "1.0.7",
     "android": {
       "package": "com.manakandukur.directory",
-      "versionCode": 8
+      "versionCode": 8,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
- 
     "plugins": [
-      "expo-speech-recognition"
-    ]
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow ManaKandukur to use microphone for voice search."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "d8adb304-e13a-47b0-9430-0ba3cf729ca5"
+      }
+    }
   }
 }
-npm installnpm installnpm installnpx expo-doctor
