@@ -9,22 +9,15 @@
     ],
     "icon": "./src/assets/manakundur-app-icon-square.png",
     "sdkVersion": "54.0.0",
-    "version": "1.0.6",
+        "version": "1.0.7",
     "android": {
       "package": "com.manakandukur.directory",
-      "versionCode": 7,
-      "permissions": [
-        "android.permission.RECORD_AUDIO"
-      ]
+      "versionCode": 8
     },
+ 
     "plugins": [
       "expo-speech-recognition"
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "d8adb304-e13a-47b0-9430-0ba3cf729ca5"
-      }
-    },
-    "owner": "manakundukurs-team"
+    ]
   }
 }
+npm installnpm installnpm installnpx expo-doctor
