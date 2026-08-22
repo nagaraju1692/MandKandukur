@@ -9,10 +9,10 @@
     ],
     "icon": "./src/assets/manakundur-app-icon-square.png",
     "sdkVersion": "54.0.0",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "android": {
       "package": "com.manakandukur.directory",
-      "versionCode": 8,
+      "versionCode": 9,
       "permissions": [
         "android.permission.RECORD_AUDIO"
       ]
