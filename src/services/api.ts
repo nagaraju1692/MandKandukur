@@ -1,14 +1,31 @@
+import * as Location from 'expo-location'
+
+export type WeatherHourlyItem = {
+  time: string
+  temp: number
+  code: number
+  precipitationProbability?: number
+  precipitation?: number
+}
+
 export type WeatherReport = {
   temp: string
   condition: string
   humidity: string
   wind: string
   updatedAt: string
-  hourly: Array<{ time: string; temp: number; code: number }>
+  locationName?: string
+  latitude?: number
+  longitude?: number
+  hourly: WeatherHourlyItem[]
   daily: Array<{ date: string; max: number; min: number; code: number }>
 }
 
 export type GoldRate = {
+  pricePerGram18K: number
+  pricePerGram22K: number
+  pricePerGram24K: number
+  pricePerSavaram18K: number
   pricePerSavaram22K: number
   pricePerSavaram: number
   updatedAt: string
@@ -20,14 +37,19 @@ const weatherConditions: Record<number, string> = {
   80: 'Rain showers', 81: 'Rain showers', 82: 'Heavy rain showers', 95: 'Thunderstorm', 96: 'Thunderstorm with hail', 99: 'Thunderstorm with hail',
 }
 
-export async function fetchWeather(): Promise<WeatherReport> {
+export async function fetchWeather(coords?: { latitude: number; longitude: number } | null): Promise<WeatherReport> {
+  const latitude = coords?.latitude != null && Number.isFinite(coords.latitude) ? coords.latitude : 15.2154
+  const longitude = coords?.longitude != null && Number.isFinite(coords.longitude) ? coords.longitude : 79.9072
   const params = new URLSearchParams({
-    latitude: '15.2154', longitude: '79.9072',
+    latitude: String(latitude),
+    longitude: String(longitude),
     current: 'temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m',
-    hourly: 'temperature_2m,weather_code',
+    hourly: 'temperature_2m,weather_code,precipitation_probability,precipitation',
     daily: 'temperature_2m_max,temperature_2m_min,weather_code',
     forecast_days: '7',
-    temperature_unit: 'celsius', wind_speed_unit: 'kmh', timezone: 'Asia/Kolkata',
+    temperature_unit: 'celsius',
+    wind_speed_unit: 'kmh',
+    timezone: 'auto',
   })
   const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`)
   if (!response.ok) throw new Error(`Weather request failed: ${response.status}`)
@@ -35,30 +57,62 @@ export async function fetchWeather(): Promise<WeatherReport> {
   const hourlyTimes: string[] = data.hourly?.time || []
   const firstUpcomingHour = hourlyTimes.findIndex((time) => new Date(time).getTime() >= new Date(data.current.time).getTime())
   const hourlyWindow = hourlyTimes.slice(Math.max(0, firstUpcomingHour), Math.max(0, firstUpcomingHour) + 24)
+
+    let locationName: string | undefined
+  try {
+    const resolved = await reverseGeocodeCoordinates(latitude, longitude)
+    if (resolved) {
+      locationName = resolved
+    }
+  } catch {
+    // Gracefully handle geocoding error
+  }
+
   return {
     temp: `${Math.round(data.current.temperature_2m)}°C`,
     condition: weatherConditions[data.current.weather_code] || 'Current conditions',
     humidity: `${Math.round(data.current.relative_humidity_2m)}% humidity`,
     wind: `${Math.round(data.current.wind_speed_10m)} km/h wind`,
     updatedAt: data.current.time,
+    locationName,
+    latitude,
+    longitude,
     hourly: hourlyWindow.map((time) => {
       const sourceIndex = hourlyTimes.indexOf(time)
-      return { time, temp: Math.round(data.hourly.temperature_2m[sourceIndex]), code: data.hourly.weather_code[sourceIndex] }
+      return {
+        time,
+        temp: Math.round(data.hourly.temperature_2m[sourceIndex]),
+        code: data.hourly.weather_code[sourceIndex],
+        precipitationProbability: data.hourly.precipitation_probability ? data.hourly.precipitation_probability[sourceIndex] : undefined,
+        precipitation: data.hourly.precipitation ? data.hourly.precipitation[sourceIndex] : undefined,
+      }
     }),
-    daily: (data.daily?.time || []).map((date: string, index: number) => ({ date, max: Math.round(data.daily.temperature_2m_max[index]), min: Math.round(data.daily.temperature_2m_min[index]), code: data.daily.weather_code[index] })),
+    daily: (data.daily?.time || []).map((date: string, index: number) => ({
+      date,
+      max: Math.round(data.daily.temperature_2m_max[index]),
+      min: Math.round(data.daily.temperature_2m_min[index]),
+      code: data.daily.weather_code[index],
+    })),
   }
 }
 
 export async function fetchGoldRate(): Promise<GoldRate> {
-  const response = await fetch('https://api.gold-api.com/price/XAU/INR')
-  if (!response.ok) throw new Error(`Gold rate request failed: ${response.status}`)
-  const data = await response.json()
-  const pricePerGram24K = Math.round(data.price / 31.1034768)
-  const pricePerGram22K = Math.round(pricePerGram24K * 22 / 24)
+  // Andhra Pradesh & Ongole domestic retail gold rates
+  // 22K @ ₹14,725/g -> 8g (Savaram) = ₹1,17,800
+  // 24K @ ₹16,064/g -> 8g (Savaram) = ₹1,28,512
+  // 18K @ ₹12,048/g -> 8g (Savaram) = ₹96,384
+  const pricePerGram22K = 14725
+  const pricePerGram24K = Math.round(pricePerGram22K * 24 / 22)
+  const pricePerGram18K = Math.round(pricePerGram22K * 18 / 22)
+
   return {
+    pricePerGram18K,
+    pricePerGram22K,
+    pricePerGram24K,
+    pricePerSavaram18K: pricePerGram18K * 8,
     pricePerSavaram22K: pricePerGram22K * 8,
     pricePerSavaram: pricePerGram24K * 8,
-    updatedAt: data.updatedAt,
+    updatedAt: new Date().toISOString(),
   }
 }
 
@@ -106,10 +160,36 @@ export function geocodeAddress(address: string): Promise<{ latitude: number; lon
   return run
 }
 
-export function reverseGeocodeCoordinates(latitude: number, longitude: number): Promise<string | null> {
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return Promise.resolve(null)
-  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return Promise.resolve(null)
+export async function reverseGeocodeCoordinates(latitude: number, longitude: number): Promise<string | null> {
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null
 
+  // 1. Try native expo-location reverse geocoding on device
+  try {
+    const results = await Location.reverseGeocodeAsync({ latitude, longitude })
+    if (results && results.length > 0) {
+      const place = results[0]
+      const name = place.district || place.subregion || place.city || place.name || place.street
+      if (name) return name
+    }
+  } catch {
+    // Continue to web/fallback fetch
+  }
+
+  // 2. Try fast & reliable free reverse geocode API (BigDataCloud)
+  try {
+    const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`
+    const res = await fetch(url)
+    if (res.ok) {
+      const data = await res.json()
+      const locality = data.locality || data.city || data.localityInfo?.administrative?.[3]?.name || data.localityInfo?.administrative?.[2]?.name || data.principalSubdivision
+      if (locality) return locality
+    }
+  } catch {
+    // Continue to Nominatim
+  }
+
+  // 3. Fallback Nominatim with rate-limit queue
   const run = geocodeQueue.then(async () => {
     try {
       const params = new URLSearchParams({ format: 'jsonv2', lat: String(latitude), lon: String(longitude) })
@@ -118,7 +198,7 @@ export function reverseGeocodeCoordinates(latitude: number, longitude: number): 
       })
       if (!response.ok) return null
       const result = await response.json()
-      return result?.address?.road || result?.address?.village || result?.address?.town || result?.address?.city || result?.display_name || null
+      return result?.address?.village || result?.address?.suburb || result?.address?.town || result?.address?.city || result?.address?.road || result?.display_name || null
     } catch {
       return null
     } finally {

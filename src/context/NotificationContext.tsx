@@ -3,6 +3,7 @@ import { AppState, Platform } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import Constants from 'expo-constants'
 import * as Notifications from 'expo-notifications'
+import * as Location from 'expo-location'
 import { useDirectory } from './DirectoryContext'
 import { fetchWeather, registerPushToken, WeatherReport } from '../services/api'
 import { useAuth } from './AuthContext'
@@ -30,19 +31,24 @@ const dismissedKey = 'mana-kandukur-mobile-dismissed-notifications'
 const clearedAtKey = 'mana-kandukur-mobile-notifications-cleared-at'
 const deviceIdKey = 'mana-kandukur-device-id'
 const rainAlertNotifiedKey = 'mana-kandukur-mobile-rain-alert-notified'
-const rainCodes = new Set([51, 53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 99])
-const kandukurOffsetMs = (5 * 60 + 30) * 60 * 1000
+const rainCodes = new Set([53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 99])
 
-function getKandukurTimeMs(time: string | Date) {
+function isRainHour(hour: { code: number; precipitationProbability?: number; precipitation?: number }) {
+  const hasPrecip = typeof hour.precipitation === 'number' && hour.precipitation >= 0.5
+  const hasHighProb = typeof hour.precipitationProbability === 'number' && hour.precipitationProbability >= 50 && rainCodes.has(hour.code)
+  if (typeof hour.precipitationProbability === 'number' && hour.precipitationProbability < 40 && (!hour.precipitation || hour.precipitation < 0.5)) {
+    return false
+  }
+  return hasPrecip || hasHighProb || (hour.precipitationProbability == null && hour.precipitation == null && rainCodes.has(hour.code))
+}
+
+function parseHourTimeMs(time: string | Date) {
   if (time instanceof Date) return time.getTime()
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(time)
-  if (!match) return new Date(time).getTime()
-  const [, year, month, day, hour, minute] = match
-  return Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)) - kandukurOffsetMs
+  return new Date(time).getTime()
 }
 
 function formatRainTime(time: string | Date) {
-  return new Date(getKandukurTimeMs(time)).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' })
+  return new Date(time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
 function isNotificationExpired(notification: MobileNotification, now: number) {
@@ -51,34 +57,40 @@ function isNotificationExpired(notification: MobileNotification, now: number) {
 
 function createRainNotification(weather: WeatherReport): MobileNotification | null {
   const now = Date.now()
-  const upcomingHours = weather.hourly
+  const locName = weather.locationName || 'Your area'
+  const upcomingHours = (weather.hourly || [])
     .map((hour, index) => ({ hour, index }))
-    .filter(({ hour }) => getKandukurTimeMs(hour.time) >= now)
-  const rainStartPosition = upcomingHours.findIndex(({ hour }) => rainCodes.has(hour.code))
+    .filter(({ hour }) => parseHourTimeMs(hour.time) + 30 * 60 * 1000 >= now)
+
+  const rainStartPosition = upcomingHours.findIndex(({ hour }) => isRainHour(hour))
   const rainStart = rainStartPosition < 0 ? -1 : upcomingHours[rainStartPosition].index
   if (rainStart < 0) return null
 
   let rainEnd = rainStart
   while (rainEnd + 1 < weather.hourly.length
-    && getKandukurTimeMs(weather.hourly[rainEnd + 1].time) >= now
-    && rainCodes.has(weather.hourly[rainEnd + 1].code)) rainEnd += 1
+    && parseHourTimeMs(weather.hourly[rainEnd + 1].time) >= now
+    && isRainHour(weather.hourly[rainEnd + 1])) {
+    rainEnd += 1
+  }
   const start = weather.hourly[rainStart]
   const end = weather.hourly[rainEnd]
   const dateKey = start.time.slice(0, 10)
-  const rainEndTime = new Date(getKandukurTimeMs(end.time) + 60 * 60 * 1000)
-  const timeRange = `${formatRainTime(start.time)} to ${formatRainTime(rainEndTime)}`
+  const startTime = new Date(start.time)
+  const rainEndTime = new Date(parseHourTimeMs(end.time) + 60 * 60 * 1000)
+  const timeRange = `${formatRainTime(startTime)} to ${formatRainTime(rainEndTime)}`
   const expiresAt = rainEndTime.getTime()
   if (!Number.isFinite(expiresAt) || expiresAt <= now) return null
 
+  const idSlug = locName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
   return {
-    id: `weather-rain-${dateKey}`,
-    title: 'Rain alert',
-    message: `Rain may occur in Kandukur between ${timeRange}.`,
+    id: `weather-rain-${idSlug}-${dateKey}-${start.time.slice(11, 16)}`,
+    title: `Rain alert · ${locName}`,
+    message: `Rain expected in ${locName} between ${timeRange} (${weather.temp}, ${weather.condition}).`,
     time: 'Weather alert',
     type: 'Weather',
-    announcementTitle: 'Rain expected in Kandukur',
-    detail: `Possible rain: ${timeRange}`,
-    description: 'If you are going outside, carry an umbrella. Prefer a car when possible; if travelling by bike, use rain gear and ride carefully.',
+    announcementTitle: `Rain expected in ${locName}`,
+    detail: `Possible rain: ${timeRange} · Current temp: ${weather.temp}`,
+    description: `Current live weather report for ${locName}: ${weather.condition}, ${weather.temp}, ${weather.humidity}, ${weather.wind}. If travelling outside, please take rain protection and ride carefully.`,
     image: 'https://images.unsplash.com/photo-1501691223387-dd0500403074?auto=format&fit=crop&w=1200&q=80',
     expiresAt,
   }
@@ -185,9 +197,27 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   useEffect(() => {
     let active = true
-    const loadRainAlert = async () => {
+        const loadRainAlert = async () => {
       try {
-        const weather = await fetchWeather()
+        let coords: { latitude: number; longitude: number } | null = null
+        try {
+          const permission = await Location.getForegroundPermissionsAsync()
+          if (permission.granted) {
+            const lastKnown = await Location.getLastKnownPositionAsync().catch(() => null)
+            if (lastKnown?.coords) {
+              coords = { latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude }
+            } else {
+              const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).catch(() => null)
+              if (current?.coords) {
+                coords = { latitude: current.coords.latitude, longitude: current.coords.longitude }
+              }
+            }
+          }
+        } catch {
+          // Gracefully fallback
+        }
+
+        const weather = await fetchWeather(coords)
         if (active) {
           setCurrentTime(Date.now())
           const nextRainNotification = createRainNotification(weather)

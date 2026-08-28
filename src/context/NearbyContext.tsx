@@ -42,15 +42,21 @@ export function NearbyProvider({ children }: { children: React.ReactNode }) {
     let subscription: Location.LocationSubscription | undefined
     const startTracking = async () => {
       try {
-        const permission = await Location.requestForegroundPermissionsAsync()
+                const permission = await Location.requestForegroundPermissionsAsync()
         if (permission.status !== 'granted') {
           setOrigin({ latitude: 15.2154, longitude: 79.9072 })
           return
         }
-        const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
-        setOrigin({ latitude: position.coords.latitude, longitude: position.coords.longitude })
+        const lastKnown = await Location.getLastKnownPositionAsync().catch(() => null)
+        if (lastKnown?.coords) {
+          setOrigin({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude })
+        }
+        const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).catch(() => null)
+        if (position?.coords) {
+          setOrigin({ latitude: position.coords.latitude, longitude: position.coords.longitude })
+        }
         subscription = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.High, distanceInterval: 100, timeInterval: 60000 },
+          { accuracy: Location.Accuracy.Balanced, distanceInterval: 100, timeInterval: 60000 },
           (nextPosition) => setOrigin({ latitude: nextPosition.coords.latitude, longitude: nextPosition.coords.longitude }),
         )
       } catch {

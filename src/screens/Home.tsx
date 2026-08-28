@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, Linking } from 'react-native'
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions, Linking } from 'react-native'
 import BottomNav from './BottomNav'
 import { getBusinessImage, getCategoryImage } from '../utils/categoryImages'
 import MobileHeader from './MobileHeader'
@@ -44,21 +44,25 @@ const popularGroups = [
   ['medical-shops', 'Medical shops', 'Medical Shops'],
   ['restaurants-hotels', 'Restaurants', 'Restaurants & Hotels'],
 ]
-const rainCodes = new Set([51, 53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 99])
-const kandukurOffsetMs = (5 * 60 + 30) * 60 * 1000
+const rainCodes = new Set([53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 99])
 
-function getKandukurTimeMs(time: string | Date) {
+function isRainHour(hour: { code: number; precipitationProbability?: number; precipitation?: number }) {
+  const hasPrecip = typeof hour.precipitation === 'number' && hour.precipitation >= 0.5
+  const hasHighProb = typeof hour.precipitationProbability === 'number' && hour.precipitationProbability >= 50 && rainCodes.has(hour.code)
+  if (typeof hour.precipitationProbability === 'number' && hour.precipitationProbability < 40 && (!hour.precipitation || hour.precipitation < 0.5)) {
+    return false
+  }
+  return hasPrecip || hasHighProb || (hour.precipitationProbability == null && hour.precipitation == null && rainCodes.has(hour.code))
+}
+
+function parseHourTimeMs(time: string | Date) {
   if (time instanceof Date) return time.getTime()
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(time)
-  if (!match) return new Date(time).getTime()
-  const [, year, month, day, hour, minute] = match
-  return Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)) - kandukurOffsetMs
+  return new Date(time).getTime()
 }
 
 function formatRainHour(time: string | Date) {
-  return new Date(getKandukurTimeMs(time)).toLocaleTimeString('en-IN', {
+  return new Date(time).toLocaleTimeString([], {
     hour: 'numeric',
-    timeZone: 'Asia/Kolkata',
   })
 }
 
@@ -67,16 +71,16 @@ function getRainWindow(weather: WeatherReport | null, t: (en: string, te: string
   const now = Date.now()
   const upcomingHours = weather.hourly
     .map((hour, index) => ({ hour, index }))
-    .filter(({ hour }) => getKandukurTimeMs(hour.time) + 60 * 60 * 1000 >= now)
+    .filter(({ hour }) => parseHourTimeMs(hour.time) + 30 * 60 * 1000 >= now)
 
-  const rainStartPos = upcomingHours.findIndex(({ hour }) => rainCodes.has(hour.code))
+  const rainStartPos = upcomingHours.findIndex(({ hour }) => isRainHour(hour))
   if (rainStartPos < 0) return null
 
   const rainStartIndex = upcomingHours[rainStartPos].index
   let rainEndIndex = rainStartIndex
   while (
     rainEndIndex + 1 < weather.hourly.length &&
-    rainCodes.has(weather.hourly[rainEndIndex + 1].code)
+    isRainHour(weather.hourly[rainEndIndex + 1])
   ) {
     rainEndIndex += 1
   }
@@ -84,11 +88,11 @@ function getRainWindow(weather: WeatherReport | null, t: (en: string, te: string
   const startHour = weather.hourly[rainStartIndex]
   const endHour = weather.hourly[rainEndIndex]
   const startTimeStr = formatRainHour(startHour.time)
-  const endTimeDate = new Date(getKandukurTimeMs(endHour.time) + 60 * 60 * 1000)
+  const endTimeDate = new Date(parseHourTimeMs(endHour.time) + 60 * 60 * 1000)
   const endTimeStr = formatRainHour(endTimeDate)
 
-  const startMs = getKandukurTimeMs(startHour.time)
-  const endMs = getKandukurTimeMs(endHour.time) + 60 * 60 * 1000
+  const startMs = parseHourTimeMs(startHour.time)
+  const endMs = parseHourTimeMs(endHour.time) + 60 * 60 * 1000
   const timeRange = `${startTimeStr} – ${endTimeStr}`
 
   return {
@@ -113,7 +117,7 @@ function weatherIcon(code: number) {
 
 function isHourInRainWindow(time: string | Date, rainWindow: ReturnType<typeof getRainWindow>) {
   if (!rainWindow) return false
-  const hourMs = getKandukurTimeMs(time)
+  const hourMs = parseHourTimeMs(time)
   return hourMs >= rainWindow.startMs && hourMs < rainWindow.endMs
 }
 
@@ -136,7 +140,7 @@ function HomeCategoryImage({ name }: { name: string }) {
 export default function Home({ navigation }: any) {
   const { favorites, toggleFavorite, isLoggedIn } = useAuth()
   const { getReviewStats } = useReviews()
-  const { distances, ready, ensureAddresses, sortNearest } = useNearby()
+  const { distances, ready, ensureAddresses, sortNearest, location } = useNearby()
   const { t, category: categoryLabel, businessName } = useLanguage()
   const { businesses, categories, announcements: updates, loading, error, retry } = useDirectory()
   const cards = homeCategoryIds.map((id) => categories.find((category) => category.id === id)).filter((category): category is NonNullable<typeof category> => Boolean(category))
@@ -159,6 +163,7 @@ export default function Home({ navigation }: any) {
   const [currentTime, setCurrentTime] = useState(new Date())
   const [gold, setGold] = useState<GoldRate | null>(null)
   const [utilityLoading, setUtilityLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [selectedUtility, setSelectedUtility] = useState<'weather' | 'gold' | null>(null)
   const [popularBusinesses, setPopularBusinesses] = useState<any[]>([])
   const [selectedUpdate, setSelectedUpdate] = useState<typeof updates[number] | null>(null)
@@ -221,16 +226,28 @@ export default function Home({ navigation }: any) {
     return () => clearInterval(timer)
   }, [])
 
-  useEffect(() => {
-    let active = true
-    Promise.allSettled([fetchWeather(), fetchGoldRate()]).then(([weatherResult, goldResult]) => {
-      if (!active) return
+      const loadUtilities = useCallback(async () => {
+    try {
+      const [weatherResult, goldResult] = await Promise.allSettled([fetchWeather(location), fetchGoldRate()])
       if (weatherResult.status === 'fulfilled') setWeather(weatherResult.value)
       if (goldResult.status === 'fulfilled') setGold(goldResult.value)
+    } finally {
       setUtilityLoading(false)
-    })
-    return () => { active = false }
-  }, [])
+    }
+  }, [location])
+
+  useEffect(() => {
+    loadUtilities()
+  }, [loadUtilities])
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      await Promise.allSettled([loadUtilities(), retry?.()])
+    } finally {
+      setRefreshing(false)
+    }
+  }, [loadUtilities, retry])
 
   const activeAnnouncements = useMemo(() => {
     const now = Date.now()
@@ -261,7 +278,12 @@ export default function Home({ navigation }: any) {
     <View style={styles.screen}>
       <MobileHeader navigation={navigation} />
 
-      <ScrollView style={styles.contentWrap} contentContainerStyle={[styles.content, { paddingHorizontal: horizontalPadding }]} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.contentWrap}
+        contentContainerStyle={[styles.content, { paddingHorizontal: horizontalPadding }]}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#D35B50']} tintColor="#D35B50" />}
+      >
         <DirectoryState loading={loading} error={error} onRetry={retry} />
         <View style={styles.searchBar}>
           <Text style={styles.searchIcon}>🔍</Text>
@@ -287,7 +309,10 @@ export default function Home({ navigation }: any) {
           </Pressable>
         </View>
 
-        <View style={styles.locationRow}><Text style={styles.locationPin}>📍</Text><Text style={styles.locationText}>{t('Kandukur, Andhra Pradesh', 'కందుకూరు, ఆంధ్రప్రదేశ్')}</Text></View>
+        <View style={styles.locationRow}>
+          <Text style={styles.locationPin}>📍</Text>
+          <Text style={styles.locationText}>{weather?.locationName ? `${weather.locationName}, Andhra Pradesh` : t('Kandukur, Andhra Pradesh', 'కందుకూరు, ఆంధ్రప్రదేశ్')}</Text>
+        </View>
 
                 <View style={styles.utilityRow}>
           <Pressable style={styles.utilityCard} onPress={() => setSelectedUtility('weather')}>
@@ -297,15 +322,15 @@ export default function Home({ navigation }: any) {
               <Text style={styles.weatherTime}>{currentTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</Text>
               <Text style={[styles.utilityValue, styles.weatherValue]}>{weather?.temp || (utilityLoading ? t('Loading…', 'లోడ్ అవుతోంది…') : t('Unavailable', 'అందుబాటులో లేదు'))}</Text>
               <Text style={styles.weatherStatus} numberOfLines={1}>{weather ? `${weatherIcon(weather.daily[0]?.code ?? 0)} ${weather.condition}` : t('Weather status unavailable', 'వాతావరణ సమాచారం అందుబాటులో లేదు')}</Text>
-              <Text style={[styles.utilityText, rainWindow && styles.rainSummaryText]} numberOfLines={1}>{rainWindow ? `🌧 ${rainWindow.badgeText}` : (weather ? weather.humidity : t('Kandukur area', 'కందుకూరు ప్రాంతం'))}</Text>
+              <Text style={[styles.utilityText, rainWindow && styles.rainSummaryText]} numberOfLines={1}>{rainWindow ? `🌧 ${rainWindow.badgeText}` : (weather ? `${weather.locationName ? weather.locationName + ' · ' : ''}${weather.humidity}` : t('Live location', 'లైవ్ లొకేషన్'))}</Text>
             </View>
           </Pressable>
-          <Pressable style={styles.utilityCard} onPress={() => setSelectedUtility('gold')}>
+                    <Pressable style={styles.utilityCard} onPress={() => setSelectedUtility('gold')}>
             <RemoteImage source={{ uri: goldImageUrl }} style={styles.utilityImage} resizeMode="cover" />
             <View style={styles.utilityCopy}>
               <Text style={[styles.utilityLabel, styles.goldLabel]}>{t('GOLD RATE TODAY', 'ఈరోజు బంగారం ధర')}</Text>
               <Text style={styles.goldRateValue}>{gold ? `₹${gold.pricePerSavaram22K.toLocaleString('en-IN')}` : utilityLoading ? t('Loading…', 'లోడ్ అవుతోంది…') : t('Unavailable', 'అందుబాటులో లేదు')}</Text>
-              <Text style={styles.utilityText}>{t('22K · 8g savaram', '22K · 8 గ్రాములు')}</Text>
+              <Text style={styles.utilityText}>{t('22K · 8g (Savaram)', '22K · 8 గ్రాములు (సవరం)')}</Text>
             </View>
           </Pressable>
         </View>
@@ -398,10 +423,10 @@ export default function Home({ navigation }: any) {
               <RemoteImage source={{ uri: selectedUtility === 'weather' ? (weatherModeImages[weatherMode] || weatherImageUrl) : goldImageUrl }} style={styles.utilityModalHeroImage} resizeMode="cover" />
               <View style={styles.utilityModalHeroShade} />
               <Pressable style={styles.utilityModalClose} onPress={() => setSelectedUtility(null)}><Text style={styles.utilityModalCloseText}>×</Text></Pressable>
-              <View style={styles.utilityModalHeroCopy}>
+                            <View style={styles.utilityModalHeroCopy}>
                 <Text style={styles.utilityModalKicker}>{selectedUtility === 'weather' ? t('Today’s weather', 'ఈరోజు వాతావరణం') : t('Gold rate today', 'ఈరోజు బంగారం ధర')}</Text>
                 <Text style={styles.utilityModalHeroValue}>{selectedUtility === 'weather' ? (weather?.temp || t('Unavailable', 'అందుబాటులో లేదు')) : (gold ? `₹${gold.pricePerSavaram22K.toLocaleString('en-IN')}` : t('Unavailable', 'అందుబాటులో లేదు'))}</Text>
-                <Text style={styles.utilityModalHeroDetail}>{selectedUtility === 'weather' ? (weather ? `${weather.condition}${rainWindow ? ` · 🌧 ${rainWindow.timeRange}` : ` · ${weather.humidity}`}` : t('Kandukur area', 'కందుకూరు ప్రాంతం')) : t('22K · 8g savaram', '22K · 8 గ్రాములు')}</Text>
+                <Text style={styles.utilityModalHeroDetail}>{selectedUtility === 'weather' ? (weather ? `${weather.condition}${rainWindow ? ` · 🌧 ${rainWindow.timeRange}` : ` · ${weather.humidity}`}` : (weather?.locationName || t('Live location', 'లైవ్ లొకేషన్'))) : t('22K · 8g (Savaram)', '22K · 8 గ్రాములు (సవరం)')}</Text>
               </View>
             </View>
             {selectedUtility === 'weather' ? (
@@ -436,10 +461,15 @@ export default function Home({ navigation }: any) {
                 })}</ScrollView>
                 <Text style={styles.forecastHeading}>{t('7-day forecast', '7 రోజుల అంచనా')}</Text>
                 <View style={styles.dailyList}>{weather.daily.map((day) => <View key={day.date} style={styles.dailyItem}><Text style={styles.dailyDay}>{new Date(day.date).toLocaleDateString([], { weekday: 'short' })}</Text><Text style={styles.forecastIcon}>{weatherIcon(day.code)}</Text><Text style={styles.dailyTemp}>{day.max}° <Text style={styles.dailyMin}>{day.min}°</Text></Text></View>)}</View>
-                <Text style={styles.utilityModalFoot}>{t('Kandukur area · Updated', 'కందుకూరు ప్రాంతం · నవీకరించబడింది')} {new Date(weather.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+                <Text style={styles.utilityModalFoot}>{(weather.locationName ? `${weather.locationName} · ` : '') + t('Updated', 'నవీకరించబడింది')} {new Date(weather.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
               </ScrollView> : <Text style={styles.utilityModalEmpty}>{utilityLoading ? t('Loading…', 'లోడ్ అవుతోంది…') : t('Weather unavailable right now.', 'ప్రస్తుతం వాతావరణ సమాచారం అందుబాటులో లేదు.')}</Text>
             ) : (
-              gold ? <View style={styles.goldModalBody}><View style={styles.goldModalRate}><Text style={styles.goldModalLabel}>22K · 8g</Text><Text style={styles.goldModalValue}>₹{gold.pricePerSavaram22K.toLocaleString('en-IN')}</Text></View><View style={styles.goldModalRate}><Text style={styles.goldModalLabel}>24K · 8g</Text><Text style={styles.goldModalValue}>₹{gold.pricePerSavaram.toLocaleString('en-IN')}</Text></View><Text style={styles.utilityModalFoot}>{t('Daily market rate · Updated', 'రోజువారీ మార్కెట్ రేటు · నవీకరించబడింది')} {gold.updatedAt ? new Date(gold.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : t('today', 'ఈరోజు')}</Text></View> : <Text style={styles.utilityModalEmpty}>{utilityLoading ? t('Loading…', 'లోడ్ అవుతోంది…') : t('Gold rate unavailable right now.', 'ప్రస్తుతం బంగారం ధర అందుబాటులో లేదు.')}</Text>
+                                                        gold ? <View style={styles.goldModalBody}>
+        <View style={styles.goldModalRate}><Text style={styles.goldModalLabel}>{t('24K · 8g (Savaram)', '24K · 8 గ్రాములు (సవరం)')}</Text><Text style={styles.goldModalValue}>₹{(gold.pricePerSavaram || (gold.pricePerGram24K ? gold.pricePerGram24K * 8 : 0)).toLocaleString('en-IN')}</Text></View>
+        <View style={styles.goldModalRate}><Text style={styles.goldModalLabel}>{t('22K · 8g (Savaram)', '22K · 8 గ్రాములు (సవరం)')}</Text><Text style={styles.goldModalValue}>₹{(gold.pricePerSavaram22K || (gold.pricePerGram22K ? gold.pricePerGram22K * 8 : 0)).toLocaleString('en-IN')}</Text></View>
+        <View style={styles.goldModalRate}><Text style={styles.goldModalLabel}>{t('18K · 8g (Savaram)', '18K · 8 గ్రాములు (సవరం)')}</Text><Text style={styles.goldModalValue}>₹{(gold.pricePerSavaram18K || (gold.pricePerGram18K ? gold.pricePerGram18K * 8 : 0)).toLocaleString('en-IN')}</Text></View>
+        <Text style={styles.utilityModalFoot}>{t('Daily market rate · Updated', 'రోజువారీ మార్కెట్ రేటు · నవీకరించబడింది')} {gold.updatedAt ? new Date(gold.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : t('today', 'ఈరోజు')}</Text>
+      </View> : <Text style={styles.utilityModalEmpty}>{utilityLoading ? t('Loading…', 'లోడ్ అవుతోంది…') : t('Gold rate unavailable right now.', 'ప్రస్తుతం బంగారం ధర అందుబాటులో లేదు.')}</Text>
             )}
           </View>
         </View>
