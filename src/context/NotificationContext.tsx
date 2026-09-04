@@ -31,15 +31,13 @@ const dismissedKey = 'mana-kandukur-mobile-dismissed-notifications'
 const clearedAtKey = 'mana-kandukur-mobile-notifications-cleared-at'
 const deviceIdKey = 'mana-kandukur-device-id'
 const rainAlertNotifiedKey = 'mana-kandukur-mobile-rain-alert-notified'
-const rainCodes = new Set([53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 99])
+const rainCodes = new Set([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99])
 
 function isRainHour(hour: { code: number; precipitationProbability?: number; precipitation?: number }) {
-  const hasPrecip = typeof hour.precipitation === 'number' && hour.precipitation >= 0.5
-  const hasHighProb = typeof hour.precipitationProbability === 'number' && hour.precipitationProbability >= 50 && rainCodes.has(hour.code)
-  if (typeof hour.precipitationProbability === 'number' && hour.precipitationProbability < 40 && (!hour.precipitation || hour.precipitation < 0.5)) {
-    return false
-  }
-  return hasPrecip || hasHighProb || (hour.precipitationProbability == null && hour.precipitation == null && rainCodes.has(hour.code))
+  if (rainCodes.has(hour.code)) return true
+  if (typeof hour.precipitation === 'number' && hour.precipitation > 0) return true
+  if (typeof hour.precipitationProbability === 'number' && hour.precipitationProbability >= 40) return true
+  return false
 }
 
 function parseHourTimeMs(time: string | Date) {
@@ -60,7 +58,7 @@ function createRainNotification(weather: WeatherReport): MobileNotification | nu
   const locName = weather.locationName || 'Your area'
   const upcomingHours = (weather.hourly || [])
     .map((hour, index) => ({ hour, index }))
-    .filter(({ hour }) => parseHourTimeMs(hour.time) + 30 * 60 * 1000 >= now)
+    .filter(({ hour }) => parseHourTimeMs(hour.time) + 60 * 60 * 1000 >= now)
 
   const rainStartPosition = upcomingHours.findIndex(({ hour }) => isRainHour(hour))
   const rainStart = rainStartPosition < 0 ? -1 : upcomingHours[rainStartPosition].index
@@ -77,7 +75,8 @@ function createRainNotification(weather: WeatherReport): MobileNotification | nu
   const dateKey = start.time.slice(0, 10)
   const startTime = new Date(start.time)
   const rainEndTime = new Date(parseHourTimeMs(end.time) + 60 * 60 * 1000)
-  const timeRange = `${formatRainTime(startTime)} to ${formatRainTime(rainEndTime)}`
+  const isRainingNow = parseHourTimeMs(start.time) <= now && (parseHourTimeMs(start.time) + 60 * 60 * 1000 >= now)
+  const timeRange = isRainingNow ? `Now to ${formatRainTime(rainEndTime)}` : `${formatRainTime(startTime)} to ${formatRainTime(rainEndTime)}`
   const expiresAt = rainEndTime.getTime()
   if (!Number.isFinite(expiresAt) || expiresAt <= now) return null
 
@@ -85,10 +84,12 @@ function createRainNotification(weather: WeatherReport): MobileNotification | nu
   return {
     id: `weather-rain-${idSlug}-${dateKey}-${start.time.slice(11, 16)}`,
     title: `Rain alert · ${locName}`,
-    message: `Rain expected in ${locName} between ${timeRange} (${weather.temp}, ${weather.condition}).`,
+    message: isRainingNow
+      ? `Raining now in ${locName} until ${formatRainTime(rainEndTime)} (${weather.temp}, ${weather.condition}).`
+      : `Rain expected in ${locName} between ${timeRange} (${weather.temp}, ${weather.condition}).`,
     time: 'Weather alert',
     type: 'Weather',
-    announcementTitle: `Rain expected in ${locName}`,
+    announcementTitle: isRainingNow ? `Raining now in ${locName}` : `Rain expected in ${locName}`,
     detail: `Possible rain: ${timeRange} · Current temp: ${weather.temp}`,
     description: `Current live weather report for ${locName}: ${weather.condition}, ${weather.temp}, ${weather.humidity}, ${weather.wind}. If travelling outside, please take rain protection and ride carefully.`,
     image: 'https://images.unsplash.com/photo-1501691223387-dd0500403074?auto=format&fit=crop&w=1200&q=80',

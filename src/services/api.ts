@@ -10,9 +10,12 @@ export type WeatherHourlyItem = {
 
 export type WeatherReport = {
   temp: string
+  currentCode?: number
+  code?: number
   condition: string
   humidity: string
   wind: string
+  precipitation?: number
   updatedAt: string
   locationName?: string
   latitude?: number
@@ -32,9 +35,34 @@ export type GoldRate = {
 }
 
 const weatherConditions: Record<number, string> = {
-  0: 'Clear sky', 1: 'Mainly clear', 2: 'Partly cloudy', 3: 'Overcast', 45: 'Foggy', 48: 'Rime fog',
-  51: 'Light drizzle', 53: 'Drizzle', 55: 'Heavy drizzle', 61: 'Light rain', 63: 'Rain', 65: 'Heavy rain',
-  80: 'Rain showers', 81: 'Rain showers', 82: 'Heavy rain showers', 95: 'Thunderstorm', 96: 'Thunderstorm with hail', 99: 'Thunderstorm with hail',
+  0: 'Clear sky',
+  1: 'Mainly clear',
+  2: 'Partly cloudy',
+  3: 'Overcast',
+  45: 'Foggy',
+  48: 'Rime fog',
+  51: 'Light drizzle',
+  53: 'Drizzle',
+  55: 'Heavy drizzle',
+  56: 'Light freezing drizzle',
+  57: 'Dense freezing drizzle',
+  61: 'Light rain',
+  63: 'Rain',
+  65: 'Heavy rain',
+  66: 'Light freezing rain',
+  67: 'Heavy freezing rain',
+  71: 'Light snow',
+  73: 'Snow',
+  75: 'Heavy snow',
+  77: 'Snow grains',
+  80: 'Light showers',
+  81: 'Rain showers',
+  82: 'Heavy rain showers',
+  85: 'Light snow showers',
+  86: 'Heavy snow showers',
+  95: 'Thunderstorm',
+  96: 'Thunderstorm with hail',
+  99: 'Thunderstorm with hail',
 }
 
 export async function fetchWeather(coords?: { latitude: number; longitude: number } | null): Promise<WeatherReport> {
@@ -43,7 +71,7 @@ export async function fetchWeather(coords?: { latitude: number; longitude: numbe
   const params = new URLSearchParams({
     latitude: String(latitude),
     longitude: String(longitude),
-    current: 'temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m',
+    current: 'temperature_2m,relative_humidity_2m,precipitation,rain,showers,weather_code,wind_speed_10m',
     hourly: 'temperature_2m,weather_code,precipitation_probability,precipitation',
     daily: 'temperature_2m_max,temperature_2m_min,weather_code',
     forecast_days: '7',
@@ -55,10 +83,13 @@ export async function fetchWeather(coords?: { latitude: number; longitude: numbe
   if (!response.ok) throw new Error(`Weather request failed: ${response.status}`)
   const data = await response.json()
   const hourlyTimes: string[] = data.hourly?.time || []
-  const firstUpcomingHour = hourlyTimes.findIndex((time) => new Date(time).getTime() >= new Date(data.current.time).getTime())
-  const hourlyWindow = hourlyTimes.slice(Math.max(0, firstUpcomingHour), Math.max(0, firstUpcomingHour) + 24)
+  const currentMs = new Date(data.current?.time || Date.now()).getTime()
+  // Include the active current hour (the hour interval that encompasses currentMs)
+  let firstUpcomingHour = hourlyTimes.findIndex((time) => new Date(time).getTime() + 60 * 60 * 1000 > currentMs)
+  if (firstUpcomingHour < 0) firstUpcomingHour = 0
+  const hourlyWindow = hourlyTimes.slice(firstUpcomingHour, firstUpcomingHour + 24)
 
-    let locationName: string | undefined
+  let locationName: string | undefined
   try {
     const resolved = await reverseGeocodeCoordinates(latitude, longitude)
     if (resolved) {
@@ -68,23 +99,52 @@ export async function fetchWeather(coords?: { latitude: number; longitude: numbe
     // Gracefully handle geocoding error
   }
 
+    const rawCurrentCode = Number(data.current?.weather_code ?? 0)
+  const currentPrecip = Number(data.current?.precipitation ?? data.current?.rain ?? data.current?.showers ?? 0)
+  const isRainCode = (rawCurrentCode >= 51 && rawCurrentCode <= 67) || (rawCurrentCode >= 80 && rawCurrentCode <= 99)
+
+  // Check the active current hour and nearby upcoming hour
+  const activeHourCode = hourlyWindow.length > 0 ? Number(data.hourly.weather_code[firstUpcomingHour] ?? 0) : 0
+  const activeHourPrecip = hourlyWindow.length > 0 ? Number(data.hourly.precipitation?.[firstUpcomingHour] ?? 0) : 0
+  const isActiveHourRain = (activeHourCode >= 51 && activeHourCode <= 67) || (activeHourCode >= 80 && activeHourCode <= 99) || activeHourPrecip > 0
+
+  let currentCode = rawCurrentCode
+  if (isRainCode) {
+    currentCode = rawCurrentCode
+  } else if (currentPrecip > 0) {
+    currentCode = currentPrecip >= 5.0 ? 65 : (currentPrecip >= 1.0 ? 63 : (currentPrecip >= 0.3 ? 61 : 51))
+  } else if (isActiveHourRain) {
+    currentCode = (activeHourCode >= 51 && activeHourCode <= 99) ? activeHourCode : (activeHourPrecip >= 1.0 ? 63 : 51)
+  }
+
   return {
     temp: `${Math.round(data.current.temperature_2m)}°C`,
-    condition: weatherConditions[data.current.weather_code] || 'Current conditions',
+    currentCode,
+    code: currentCode,
+    condition: weatherConditions[currentCode] || 'Current conditions',
     humidity: `${Math.round(data.current.relative_humidity_2m)}% humidity`,
     wind: `${Math.round(data.current.wind_speed_10m)} km/h wind`,
+    precipitation: currentPrecip,
     updatedAt: data.current.time,
     locationName,
     latitude,
     longitude,
     hourly: hourlyWindow.map((time) => {
       const sourceIndex = hourlyTimes.indexOf(time)
+      const rawHourlyCode = data.hourly.weather_code[sourceIndex]
+      const hourlyPrecip = data.hourly.precipitation ? data.hourly.precipitation[sourceIndex] : undefined
+      const isHourlyRainCode = (rawHourlyCode >= 51 && rawHourlyCode <= 67) || (rawHourlyCode >= 80 && rawHourlyCode <= 99)
+      const effectiveHourlyCode = isHourlyRainCode
+        ? rawHourlyCode
+        : (typeof hourlyPrecip === 'number' && hourlyPrecip > 0)
+          ? (hourlyPrecip >= 5.0 ? 65 : hourlyPrecip >= 1.0 ? 63 : 61)
+          : rawHourlyCode
       return {
         time,
         temp: Math.round(data.hourly.temperature_2m[sourceIndex]),
-        code: data.hourly.weather_code[sourceIndex],
+        code: effectiveHourlyCode,
         precipitationProbability: data.hourly.precipitation_probability ? data.hourly.precipitation_probability[sourceIndex] : undefined,
-        precipitation: data.hourly.precipitation ? data.hourly.precipitation[sourceIndex] : undefined,
+        precipitation: hourlyPrecip,
       }
     }),
     daily: (data.daily?.time || []).map((date: string, index: number) => ({
