@@ -124,7 +124,7 @@ export default function Profile({ navigation }: any) {
         <Pressable style={styles.settings} onPress={() => Alert.alert(t('Profile settings', 'ప్రొఫైల్ సెట్టింగ్స్'), t('Profile settings will be available soon.', 'ప్రొఫైల్ సెట్టింగ్స్ త్వరలో అందుబాటులో ఉంటాయి.'))}><Text style={styles.settingsText}>⚙</Text></Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.profileContent} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.profileScroll} contentContainerStyle={styles.profileContent} showsVerticalScrollIndicator={false}>
       <View style={styles.identity}>
         <View style={styles.avatar}><Text style={styles.avatarText}>{initials}</Text></View>
         <View style={styles.identityText}>
@@ -178,7 +178,6 @@ export default function Profile({ navigation }: any) {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    paddingBottom: 88,
     backgroundColor: '#EAEAF9',
   },
   header: {
@@ -286,6 +285,9 @@ const styles = StyleSheet.create({
   },
   profileContent: {
     paddingBottom: 110,
+  },
+  profileScroll: {
+    flex: 1,
   },
   avatar: {
     width: 52,

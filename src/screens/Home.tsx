@@ -1434,7 +1434,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.6,
   },
   categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  categoryCard: { height: 196, overflow: 'hidden', borderRadius: 10, borderWidth: 1, borderColor: '#8D6B96', backgroundColor: '#241329' },
+  categoryCard: { height: 166, overflow: 'hidden', borderRadius: 10, borderWidth: 1, borderColor: '#8D6B96', backgroundColor: '#241329' },
   categoryImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
   categoryImageFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#4A294D' },
   categoryShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(20, 8, 24, 0.12)' },

@@ -9,7 +9,7 @@ import { useDirectory } from '../context/DirectoryContext'
 import MobileHeader from './MobileHeader'
 import BottomNav from './BottomNav'
 import { colors } from '../ui/theme'
-import { geocodeAddress, reverseGeocodeCoordinates, uploadAdminBusinessImage, uploadMarketplaceImage } from '../services/api'
+import { apiBaseUrl, geocodeAddress, reverseGeocodeCoordinates, uploadAdminBusinessImage, uploadMarketplaceImage } from '../services/api'
 import FocusTextInput from '../ui/FocusTextInput'
 import LocationPickerModal from '../components/LocationPickerModal'
 
@@ -283,7 +283,7 @@ export default function SubmitBusiness({ navigation, route }: any) {
         gallery: form.galleryInput.split(',').map((value) => value.trim()).filter(Boolean),
       }
       if (editingBusiness && (isSuperAdmin || editingBusiness.submittedBy === user.phone)) {
-        const response = await fetch(`${process.env.EXPO_PUBLIC_API_URL || 'https://mmanakandukur-backend-dah2a4aafecacbff.indiasouthcentral-01.azurewebsites.net'}/api/businesses/${encodeURIComponent(editingBusiness.id)}`, {
+        const response = await fetch(`${apiBaseUrl}/api/businesses/${encodeURIComponent(editingBusiness.id)}`, {
           method: 'PATCH',
           headers: {
             'Content-Type': 'application/json',

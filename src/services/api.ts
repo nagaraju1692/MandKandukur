@@ -473,13 +473,13 @@ export function buildGoogleMapsDirectionsUrl(
 }
 
 const DEFAULT_API_URL = 'https://mmanakandukur-backend-dah2a4aafecacbff.indiasouthcentral-01.azurewebsites.net'
-const apiBaseUrl = process.env.EXPO_PUBLIC_API_URL || DEFAULT_API_URL
+export const apiBaseUrl = (process.env.EXPO_PUBLIC_API_URL || DEFAULT_API_URL).replace(/\/$/, '')
 
 export async function fetchJson<T>(path: string, options?: RequestInit, userPhone?: string | null): Promise<T> {
   if (!apiBaseUrl) throw new Error('EXPO_PUBLIC_API_URL is not configured')
   const headers = new Headers(options?.headers)
   if (userPhone) headers.set('x-user-phone', userPhone)
-  const response = await fetch(`${apiBaseUrl.replace(/\/$/, '')}${path}`, { ...options, headers })
+  const response = await fetch(`${apiBaseUrl}${path}`, { ...options, headers })
   if (!response.ok) {
     let message = `API request failed: ${response.status}`
     try {

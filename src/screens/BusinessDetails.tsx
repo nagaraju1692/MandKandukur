@@ -10,7 +10,7 @@ import { useNearby } from '../context/NearbyContext'
 import { useDirectory } from '../context/DirectoryContext'
 import DirectoryState from './DirectoryState'
 import { colors } from '../ui/theme'
-import { buildGoogleMapsDirectionsUrl } from '../services/api'
+import { apiBaseUrl, buildGoogleMapsDirectionsUrl } from '../services/api'
 import FocusTextInput from '../ui/FocusTextInput'
 import RemoteImage from '../ui/RemoteImage'
 
@@ -82,7 +82,7 @@ export default function BusinessDetails({ route, navigation }: any) {
           style: 'destructive',
           onPress: async () => {
             try {
-              const response = await fetch(`${process.env.EXPO_PUBLIC_API_URL || 'https://mmanakandukur-backend-dah2a4aafecacbff.indiasouthcentral-01.azurewebsites.net'}/api/businesses/${encodeURIComponent(business.id)}`, {
+              const response = await fetch(`${apiBaseUrl}/api/businesses/${encodeURIComponent(business.id)}`, {
                 method: 'DELETE',
                 headers: { 'x-user-phone': user?.phone || '' },
               })
