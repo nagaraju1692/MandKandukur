@@ -2,19 +2,26 @@
   "expo": {
     "name": "ManaKandukur Mobile",
     "slug": "nagaraju",
-    "platforms": [
-      "ios",
-      "android",
-      "web"
-    ],
+    "version": "1.0.10",
+    "orientation": "portrait",
     "icon": "./src/assets/manakundur-app-icon-square.png",
-    "sdkVersion": "54.0.0",
-    "version": "1.0.9",
+    "splash": {
+      "image": "./src/assets/manakundur-app-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
     "android": {
       "package": "com.manakandukur.directory",
       "versionCode": 11,
+      "adaptiveIcon": {
+        "foregroundImage": "./src/assets/manakundur-app-icon-square.png",
+        "backgroundColor": "#ffffff"
+      },
       "permissions": [
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "plugins": [
@@ -22,6 +29,12 @@
         "expo-speech-recognition",
         {
           "microphonePermission": "Allow ManaKandukur to use microphone for voice search."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow ManaKandukur to access your location to find nearby businesses."
         }
       ]
     ],
