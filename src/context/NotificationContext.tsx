@@ -31,13 +31,18 @@ const dismissedKey = 'mana-kandukur-mobile-dismissed-notifications'
 const clearedAtKey = 'mana-kandukur-mobile-notifications-cleared-at'
 const deviceIdKey = 'mana-kandukur-device-id'
 const rainAlertNotifiedKey = 'mana-kandukur-mobile-rain-alert-notified'
-const rainCodes = new Set([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99])
+const rainCodes = new Set([53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 99])
 
 function isRainHour(hour: { code: number; precipitationProbability?: number; precipitation?: number }) {
-  if (rainCodes.has(hour.code)) return true
-  if (typeof hour.precipitation === 'number' && hour.precipitation > 0) return true
-  if (typeof hour.precipitationProbability === 'number' && hour.precipitationProbability >= 40) return true
-  return false
+  if (typeof hour.precipitation === 'number' && hour.precipitation < 0.3) {
+    return false
+  }
+  if (typeof hour.precipitationProbability === 'number' && hour.precipitationProbability < 50 && (!hour.precipitation || hour.precipitation < 0.5)) {
+    return false
+  }
+  const hasPrecip = typeof hour.precipitation === 'number' && hour.precipitation >= 0.5
+  const hasHighProb = typeof hour.precipitationProbability === 'number' && hour.precipitationProbability >= 50 && rainCodes.has(hour.code)
+  return hasPrecip || hasHighProb || (hour.precipitationProbability == null && hour.precipitation == null && rainCodes.has(hour.code))
 }
 
 function parseHourTimeMs(time: string | Date) {
@@ -75,7 +80,8 @@ function createRainNotification(weather: WeatherReport): MobileNotification | nu
   const dateKey = start.time.slice(0, 10)
   const startTime = new Date(start.time)
   const rainEndTime = new Date(parseHourTimeMs(end.time) + 60 * 60 * 1000)
-  const isRainingNow = parseHourTimeMs(start.time) <= now && (parseHourTimeMs(start.time) + 60 * 60 * 1000 >= now)
+  const isCurrentlyRaining = (typeof weather.precipitation === 'number' && weather.precipitation >= 0.3) || (typeof weather.currentCode === 'number' && rainCodes.has(weather.currentCode))
+  const isRainingNow = isCurrentlyRaining && parseHourTimeMs(start.time) <= now && (parseHourTimeMs(start.time) + 60 * 60 * 1000 >= now)
   const timeRange = isRainingNow ? `Now to ${formatRainTime(rainEndTime)}` : `${formatRainTime(startTime)} to ${formatRainTime(rainEndTime)}`
   const expiresAt = rainEndTime.getTime()
   if (!Number.isFinite(expiresAt) || expiresAt <= now) return null

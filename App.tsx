@@ -32,7 +32,8 @@ import BusTimetable from './src/screens/BusTimetable';
 import { DirectoryProvider } from './src/context/DirectoryContext';
 import { useDirectory } from './src/context/DirectoryContext';
 import { useLanguage } from './src/context/LanguageContext';
-import { recordAppUsage } from './src/services/api';
+import * as Location from 'expo-location';
+import { recordAppUsage, reverseGeocodeCoordinates } from './src/services/api';
 import { fetchLatestUpdate } from './src/services/updateCheck';
 
 enableScreens();
@@ -72,10 +73,45 @@ function UsageTracker() {
           await AsyncStorage.setItem('mana-kandukur-device-id', deviceId)
         }
 
+        let deviceName: string | null = null
+        if (Constants.deviceName) {
+          deviceName = Constants.deviceName
+        } else if (Platform.OS === 'android') {
+          const constants = Platform.constants as { Brand?: string; Manufacturer?: string; Model?: string }
+          const brand = constants?.Brand || constants?.Manufacturer || ''
+          const model = constants?.Model || ''
+          const full = `${brand} ${model}`.trim()
+          deviceName = full || 'Android Device'
+        } else if (Platform.OS === 'ios') {
+          const constants = Platform.constants as { model?: string }
+          deviceName = constants?.model || 'iPhone'
+        } else if (Platform.OS === 'web') {
+          deviceName = 'Web Browser'
+        }
+
+        let locationName: string | null = null
+        try {
+          const permission = await Location.getForegroundPermissionsAsync().catch(() => null)
+          if (permission?.granted) {
+            const lastKnown = await Location.getLastKnownPositionAsync().catch(() => null)
+            const coords = lastKnown?.coords || (await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).catch(() => null))?.coords
+            if (coords) {
+              locationName = await reverseGeocodeCoordinates(coords.latitude, coords.longitude).catch(() => null)
+              if (!locationName) {
+                locationName = `${coords.latitude.toFixed(3)}, ${coords.longitude.toFixed(3)}`
+              }
+            }
+          }
+        } catch {
+          // Ignore location errors
+        }
+
         if (!cancelled) {
           await recordAppUsage(deviceId, {
             userPhone: user?.phone,
             userName: user?.name,
+            deviceName,
+            location: locationName,
             appVersion: Constants.expoConfig?.version,
             platform: Platform.OS,
           })
@@ -87,7 +123,7 @@ function UsageTracker() {
 
     registerUsage()
     return () => { cancelled = true }
-  }, [user?.phone])
+  }, [user?.phone, user?.name])
 
   return null
 }

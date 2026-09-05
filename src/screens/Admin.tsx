@@ -755,14 +755,41 @@ export default function Admin({ navigation }: any) {
                   ))}
                 </View>
                 <Text style={[styles.formTitle, styles.recentActivityTitle]}>{t('Recent activity', 'Recent activity')}</Text>
-                {recentActivity.length === 0 ? <Text style={styles.emptyCopy}>{t('No recent activity.', 'No recent activity.')}</Text> : recentActivity.map((item, index) => (
-                  <View key={`${item.type}-${item.entity_id}-${index}`} style={styles.row}>
-                    <View style={styles.rowCopy}>
-                      <Text style={styles.rowTitle}>{item.type} · {item.label}</Text>
-                      <Text style={styles.rowDetail}>{new Date(item.created_at).toLocaleString()}</Text>
+                {recentActivity.length === 0 ? <Text style={styles.emptyCopy}>{t('No recent activity.', 'No recent activity.')}</Text> : recentActivity.map((item, index) => {
+                  const userName = item.user_name || item.userName || (item.user_phone ? `+${item.user_phone}` : (item.userPhone ? `+${item.userPhone}` : null))
+                  const device = item.device_name || item.deviceName || item.platform
+                  const location = item.location
+                  return (
+                    <View key={`${item.type}-${item.entity_id}-${index}`} style={styles.largeRow}>
+                      <View style={styles.rowCopy}>
+                        <Text style={styles.rowTitle}>{item.type} · {item.label}</Text>
+                        <Text style={styles.rowDetail}>{new Date(item.created_at).toLocaleString()}</Text>
+                        {(userName || device || location) && (
+                          <View style={styles.activityMetaRow}>
+                            {userName ? (
+                              <View style={styles.activityTag}>
+                                <Text style={styles.activityTagIcon}>👤</Text>
+                                <Text style={styles.activityTagText} numberOfLines={1}>{userName}</Text>
+                              </View>
+                            ) : null}
+                            {device ? (
+                              <View style={styles.activityTag}>
+                                <Text style={styles.activityTagIcon}>📱</Text>
+                                <Text style={styles.activityTagText} numberOfLines={1}>{device}</Text>
+                              </View>
+                            ) : null}
+                            {location ? (
+                              <View style={styles.activityTag}>
+                                <Text style={styles.activityTagIcon}>📍</Text>
+                                <Text style={styles.activityTagText} numberOfLines={1}>{location}</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                        )}
+                      </View>
                     </View>
-                  </View>
-                ))}
+                  )
+                })}
               </>
             )}
           </View>
@@ -935,6 +962,10 @@ const styles = StyleSheet.create({
   statValue: { color: '#1F2235', fontSize: 20, fontWeight: '800' },
   statLabel: { marginTop: 4, color: '#656E87', fontSize: 11, fontWeight: '600' },
   recentActivityTitle: { marginTop: 16 },
+  activityMetaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  activityTag: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0EEFF', borderWidth: 1, borderColor: '#DCD8FA', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3, maxWidth: '100%' },
+  activityTagIcon: { fontSize: 10, marginRight: 4 },
+  activityTagText: { fontSize: 11, fontWeight: '600', color: '#4B429F', flexShrink: 1 },
   webDateOverlay: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(22, 24, 41, 0.35)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20, zIndex: 55 },
   webDateCard: { width: '100%', maxWidth: 460, borderRadius: 14, borderWidth: 1, borderColor: '#E3E5F1', backgroundColor: '#FFF', padding: 16 },
   webDateTitle: { color: '#1F2235', fontSize: 18, fontWeight: '800' },

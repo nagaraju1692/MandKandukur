@@ -11,6 +11,7 @@ import { useDirectory } from '../context/DirectoryContext'
 import DirectoryState from './DirectoryState'
 import { colors } from '../ui/theme'
 import { fetchGoldRate, fetchWeather, GoldRate, WeatherReport } from '../services/api'
+import { fetchCricketMatchDetails, fetchLiveCricketMatches, formatCricketDateTime, formatCompactCricketDateTime, CricketMatch } from '../services/cricketApi'
 import FocusTextInput from '../ui/FocusTextInput'
 import { fetchLatestUpdate, AppUpdateInfo, DISMISSED_VERSION_KEY } from '../services/updateCheck'
 import AsyncStorage from '@react-native-async-storage/async-storage'
@@ -39,12 +40,22 @@ const weatherModeImages = {
 
 const goldImageUrl = 'https://images.unsplash.com/photo-1610375461246-83df859d849d?auto=format&fit=crop&w=700&q=85'
 const announcementCardGap = 12
+const cricketCardGap = 10
 const popularGroups = [
   ['hospitals-clinics', 'Hospitals', 'Hospitals & Clinics'],
   ['medical-shops', 'Medical shops', 'Medical Shops'],
   ['restaurants-hotels', 'Restaurants', 'Restaurants & Hotels'],
 ]
 const rainCodes = new Set([53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 99])
+
+function formatTeamScore(score?: string): string {
+  if (!score || typeof score !== 'string') return '—'
+  const trimmed = score.trim()
+  if (!trimmed || /^(ns|na|n\/a|not started|scheduled|—|-)$/i.test(trimmed)) {
+    return '—'
+  }
+  return score
+}
 
 function isRainHour(hour: { code: number; precipitationProbability?: number; precipitation?: number }) {
   const hasPrecip = typeof hour.precipitation === 'number' && hour.precipitation >= 0.5
@@ -115,6 +126,53 @@ function weatherIcon(code: number) {
   return '☀'
 }
 
+function normalizeFormatName(raw?: string): string {
+  if (!raw) return ''
+  const trimmed = raw.trim()
+  const lower = trimmed.toLowerCase()
+  if (lower === 'cricket' || lower === 'cricket match') return ''
+
+  if (/\b(one day international|one day|one-day|odi)\b/i.test(trimmed)) {
+    return 'ODI'
+  }
+  if (/\b(twenty20 international|twenty20 i|twenty20|t20i|t20)\b/i.test(trimmed)) {
+    return 'T20'
+  }
+  if (/\b(test match|test)\b/i.test(trimmed)) {
+    return 'TEST'
+  }
+  return trimmed
+}
+
+function getFormatBadgeStyle(format?: string) {
+  const normalized = (format || '').toUpperCase()
+  if (
+    normalized.includes('WOMEN') ||
+    normalized.includes('WOMAN') ||
+    normalized.includes('W-T20') ||
+    normalized.includes('W-ODI') ||
+    normalized.includes('WT20') ||
+    normalized.includes('WODI') ||
+    normalized.includes('W-TEST') ||
+    normalized.includes('WTEST')
+  ) {
+    return { bg: '#FFE4E6', text: '#BE123C', border: '#FECDD3' }
+  }
+  if (normalized.includes('T20I') || normalized.includes('TWENTY20 INTERNATIONAL') || normalized.includes('TWENTY20 I')) {
+    return { bg: '#F3E8FF', text: '#7E22CE', border: '#E9D5FF' }
+  }
+  if (normalized.includes('T20') || normalized.includes('TWENTY20') || normalized.includes('IPL')) {
+    return { bg: '#FEF3C7', text: '#D97706', border: '#FCD34D' }
+  }
+  if (normalized.includes('ODI') || normalized.includes('ONE DAY') || normalized.includes('ONE-DAY')) {
+    return { bg: '#E0F2FE', text: '#0369A1', border: '#7DD3FC' }
+  }
+  if (normalized.includes('TEST')) {
+    return { bg: '#DCFCE7', text: '#15803D', border: '#86EFAC' }
+  }
+  return { bg: '#F1F5F9', text: '#475569', border: '#CBD5E1' }
+}
+
 function isHourInRainWindow(time: string | Date, rainWindow: ReturnType<typeof getRainWindow>) {
   if (!rainWindow) return false
   const hourMs = parseHourTimeMs(time)
@@ -158,10 +216,14 @@ export default function Home({ navigation }: any) {
     }
     return businesses.filter((business) => categoryIds.has(business.categoryId)).length
   }
-  const [search, setSearch] = useState('')
+    const [search, setSearch] = useState('')
   const [weather, setWeather] = useState<WeatherReport | null>(null)
   const [currentTime, setCurrentTime] = useState(new Date())
   const [gold, setGold] = useState<GoldRate | null>(null)
+  const [cricketMatches, setCricketMatches] = useState<CricketMatch[]>([])
+  const [cricketError, setCricketError] = useState<string | null>(null)
+  const [selectedCricketMatch, setSelectedCricketMatch] = useState<CricketMatch | null>(null)
+  const [activeCricketTab, setActiveCricketTab] = useState('live')
   const [utilityLoading, setUtilityLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [selectedUtility, setSelectedUtility] = useState<'weather' | 'gold' | null>(null)
@@ -183,15 +245,41 @@ export default function Home({ navigation }: any) {
       if (isFinal) submitSearch(transcript)
     },
   })
-  const announcementRailRef = useRef<ScrollView | null>(null)
+    const announcementRailRef = useRef<ScrollView | null>(null)
   const announcementIndexRef = useRef(0)
+  const cricketRailRef = useRef<ScrollView | null>(null)
+  const cricketAutoDirectionRef = useRef<1 | -1>(1)
+  const [activeCricketIndex, setActiveCricketIndex] = useState(0)
+  const [isCricketInteracting, setIsCricketInteracting] = useState(false)
   const { width } = useWindowDimensions()
   const isPhone = width < 600
   const horizontalPadding = isPhone ? 18 : 24
   const categoryCardWidth = (width - horizontalPadding * 2 - 12) / 2
   const announcementCardWidth = isPhone ? (width - horizontalPadding * 2 - announcementCardGap) / 2 : 252
+  const availableCricketWidth = width - horizontalPadding * 2 - (width >= 600 ? 68 : 0)
+  const cricketCardWidth = Math.max(140, (availableCricketWidth - cricketCardGap) / 2)
   const weatherMode = getWeatherMode(weather, currentTime)
   const rainWindow = getRainWindow(weather, t)
+
+  const formatMatchStatus = useCallback((status: string, isLive: boolean, isUpcoming: boolean) => {
+    const rawStatus = (status || '').trim()
+    const lower = rawStatus.toLowerCase()
+
+    if (lower === 'ns' || lower === 'scheduled' || lower === 'not started' || lower === 'upcoming' || (isUpcoming && (!rawStatus || lower === 'upcoming'))) {
+      return ''
+    }
+    if (isLive && (lower === 'live' || lower === 'in progress' || !rawStatus)) {
+      return t('Live Now', 'లైవ్')
+    }
+    if (rawStatus) {
+      return rawStatus
+    }
+    if (isLive) {
+      return t('Live Now', 'లైవ్')
+    }
+    return ''
+  }, [t])
+
   const openBusiness = (businessId: string) => {
     setSelectedBusinessId(businessId)
     navigation.navigate('BusinessDetails', { id: businessId })
@@ -226,11 +314,21 @@ export default function Home({ navigation }: any) {
     return () => clearInterval(timer)
   }, [])
 
-      const loadUtilities = useCallback(async () => {
+            const loadUtilities = useCallback(async () => {
     try {
-      const [weatherResult, goldResult] = await Promise.allSettled([fetchWeather(location), fetchGoldRate()])
+      const [weatherResult, goldResult, cricketResult] = await Promise.allSettled([
+        fetchWeather(location),
+        fetchGoldRate(),
+        fetchLiveCricketMatches(),
+      ])
       if (weatherResult.status === 'fulfilled') setWeather(weatherResult.value)
       if (goldResult.status === 'fulfilled') setGold(goldResult.value)
+      if (cricketResult.status === 'fulfilled') {
+        setCricketMatches(cricketResult.value)
+        setCricketError(null)
+      } else {
+        setCricketError(t('Cricket scores are unavailable right now.', 'ప్రస్తుతం క్రికెట్ స్కోర్లు అందుబాటులో లేవు.'))
+      }
     } finally {
       setUtilityLoading(false)
     }
@@ -239,6 +337,28 @@ export default function Home({ navigation }: any) {
   useEffect(() => {
     loadUtilities()
   }, [loadUtilities])
+
+  useEffect(() => {
+    if (cricketMatches.length < 2 || isCricketInteracting) return
+    const maxIndex = Math.max(0, cricketMatches.length - 2)
+    if (maxIndex === 0) return
+    const timer = setInterval(() => {
+      let nextIndex = activeCricketIndex + cricketAutoDirectionRef.current
+      if (nextIndex >= maxIndex) {
+        cricketAutoDirectionRef.current = -1
+        nextIndex = maxIndex
+      } else if (nextIndex <= 0) {
+        cricketAutoDirectionRef.current = 1
+        nextIndex = 0
+      }
+      cricketRailRef.current?.scrollTo({
+        x: nextIndex * (cricketCardWidth + cricketCardGap),
+        animated: true,
+      })
+      setActiveCricketIndex(nextIndex)
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [activeCricketIndex, cricketCardGap, cricketCardWidth, cricketMatches.length, isCricketInteracting])
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
@@ -325,7 +445,7 @@ export default function Home({ navigation }: any) {
               <Text style={[styles.utilityText, rainWindow && styles.rainSummaryText]} numberOfLines={1}>{rainWindow ? `🌧 ${rainWindow.badgeText}` : (weather ? `${weather.locationName ? weather.locationName + ' · ' : ''}${weather.humidity}` : t('Live location', 'లైవ్ లొకేషన్'))}</Text>
             </View>
           </Pressable>
-                    <Pressable style={styles.utilityCard} onPress={() => setSelectedUtility('gold')}>
+                                        <Pressable style={styles.utilityCard} onPress={() => setSelectedUtility('gold')}>
             <RemoteImage source={{ uri: goldImageUrl }} style={styles.utilityImage} resizeMode="cover" />
             <View style={styles.utilityCopy}>
               <Text style={[styles.utilityLabel, styles.goldLabel]}>{t('GOLD RATE TODAY', 'ఈరోజు బంగారం ధర')}</Text>
@@ -334,6 +454,372 @@ export default function Home({ navigation }: any) {
             </View>
           </Pressable>
         </View>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                {(cricketMatches.length > 0 || cricketError) && (
+                  <View style={styles.cricketSection}>
+                    {cricketMatches.length > 0 ? <View style={styles.sectionHeading}>
+                      <View style={styles.cricketHeadingRow}>
+                        <View style={styles.cricketIconWrap}>
+                          <Ionicons name="trophy" size={14} color="#D97706" />
+                        </View>
+                        <Text style={styles.sectionTitle}>{t('Cricket Scores', 'క్రికెట్ స్కోర్లు')}</Text>
+                        {cricketMatches.some((m) => m.isLive) && (
+                          <View style={styles.cricketHeaderLiveBadge}>
+                            <View style={styles.cricketLiveDot} />
+                            <Text style={styles.cricketHeaderLiveText}>{t('LIVE', 'లైవ్')}</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={styles.updateCount}>{cricketMatches.length} {t('matches', 'మ్యాచ్‌లు')}</Text>
+                    </View> : null}
+                    {cricketMatches.length === 0 ? (
+                      <View style={styles.cricketCommentaryEmpty}>
+                        <Ionicons name="information-circle-outline" size={18} color="#64748B" />
+                        <Text style={styles.cricketCommentaryEmptyText}>{cricketError || t('No matches from yesterday, today, or upcoming fixtures are available.', 'నిన్నటి, ఈరోజు లేదా రాబోయే మ్యాచ్‌లు అందుబాటులో లేవు.')}</Text>
+                      </View>
+                    ) : null}
+                    {cricketMatches.length > 0 && <>
+                    <View style={styles.cricketRailWrap}>
+                      {width >= 600 && (
+                        <Pressable
+                          style={[styles.cricketRailArrow, activeCricketIndex === 0 && styles.cricketRailArrowDisabled]}
+                          disabled={activeCricketIndex === 0}
+                          onPress={() => {
+                            const nextIndex = Math.max(0, activeCricketIndex - 1)
+                            cricketRailRef.current?.scrollTo({ x: nextIndex * (cricketCardWidth + cricketCardGap), animated: true })
+                            setActiveCricketIndex(nextIndex)
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel={t('Previous matches', 'మునుపటి మ్యాచ్‌లు')}
+                        >
+                          <Ionicons name="chevron-back" size={16} color="#475569" />
+                        </Pressable>
+                      )}
+                      <ScrollView
+                        ref={cricketRailRef}
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.cricketRail}
+                        decelerationRate="fast"
+                        snapToInterval={cricketCardWidth + cricketCardGap}
+                        snapToAlignment="start"
+                        nestedScrollEnabled={true}
+                        directionalLockEnabled={true}
+                        onScrollBeginDrag={() => setIsCricketInteracting(true)}
+                        onScrollEndDrag={() => setIsCricketInteracting(false)}
+                        scrollEventThrottle={16}
+                        onScroll={(event) => {
+                          const step = cricketCardWidth + cricketCardGap
+                          const offset = Math.max(0, event.nativeEvent.contentOffset.x)
+                          const maxIdx = Math.max(0, cricketMatches.length - 2)
+                          const newIdx = Math.max(0, Math.min(maxIdx, Math.round(offset / step)))
+                          setActiveCricketIndex((current) => current === newIdx ? current : newIdx)
+                        }}
+                        onMomentumScrollEnd={(event) => {
+                          const step = cricketCardWidth + cricketCardGap
+                          const offset = event.nativeEvent.contentOffset.x
+                          const maxIdx = Math.max(0, cricketMatches.length - 2)
+                          const newIdx = Math.max(0, Math.min(maxIdx, Math.round(offset / step)))
+                          setActiveCricketIndex(newIdx)
+                        }}
+                      >
+                      {cricketMatches.map((match) => {
+                        const matchTime = formatCompactCricketDateTime(match.dateTime || match.startTime) || match.startTime || match.dateTime
+                        const formatType = normalizeFormatName(match.matchType)
+                        const formatStyle = getFormatBadgeStyle(formatType)
+                        const showFormat = Boolean(formatType)
+
+                        const cleanSeries = normalizeFormatName(match.series)
+                        const showSeries = Boolean(cleanSeries && cleanSeries.toLowerCase() !== formatType.toLowerCase())
+                        const seriesStyle = getFormatBadgeStyle(cleanSeries)
+                        const isUpcoming = match.state === 'upcoming'
+                        const statusText = formatMatchStatus(match.status, match.isLive, isUpcoming)
+
+                        return (
+                          <Pressable
+                            key={match.id}
+                            style={[
+                              styles.cricketCard,
+                              { width: cricketCardWidth },
+                              match.isLive && styles.cricketCardLive,
+                              isUpcoming && styles.cricketCardUpcoming,
+                            ]}
+                            onPress={() => {
+                              setSelectedCricketMatch(match)
+                              setActiveCricketTab(match.isLive ? 'live' : 'info')
+                              fetchCricketMatchDetails(match.id).then((details) => {
+                                setSelectedCricketMatch((current) => current?.id === match.id ? { ...current, ...details } : current)
+                              }).catch(() => {
+                                // The list response remains usable when detail data is unavailable.
+                              })
+                            }}
+                          >
+                            {match.isLive ? (
+                              <View style={styles.cricketCardTopLiveBar} />
+                            ) : isUpcoming ? (
+                              <View style={styles.cricketCardTopUpcomingBar} />
+                            ) : (
+                              <View style={styles.cricketCardTopDefaultBar} />
+                            )}
+
+                            <View style={styles.cricketCardHeader}>
+                              <View style={styles.cricketHeaderTagsGroup}>
+                                {showFormat ? (
+                                  <View style={[styles.cricketFormatBadge, { backgroundColor: formatStyle.bg, borderColor: formatStyle.border }]}>
+                                    <Text style={[styles.cricketFormatText, { color: formatStyle.text }]}>{formatType}</Text>
+                                  </View>
+                                ) : null}
+                                {showSeries ? (
+                                  <View style={[styles.cricketSeriesBadge, { backgroundColor: seriesStyle.bg, borderColor: seriesStyle.border }]}>
+                                    <Ionicons name="trophy" size={10} color={seriesStyle.text} style={styles.cricketSeriesIcon} />
+                                    <Text style={[styles.cricketSeriesText, { color: seriesStyle.text }]} numberOfLines={1}>{cleanSeries}</Text>
+                                  </View>
+                                ) : null}
+                              </View>
+                              {match.isLive ? (
+                                <View style={styles.cricketLiveBadge}>
+                                  <View style={styles.cricketLiveDot} />
+                                  <Text style={styles.cricketLiveText}>{t('LIVE', 'లైవ్')}</Text>
+                                </View>
+                              ) : isUpcoming ? (
+                                <View style={styles.cricketUpcomingBadge}>
+                                  <Ionicons name="calendar-outline" size={10} color="#0284C7" style={styles.cricketUpcomingIcon} />
+                                  <Text style={styles.cricketUpcomingText}>{t('Upcoming', 'రాబోయేది')}</Text>
+                                </View>
+                              ) : match.state === 'completed' ? (
+                                <View style={styles.cricketEndedBadge}>
+                                  <Text style={styles.cricketEndedText}>{match.dayLabel === 'yesterday' ? t('Yesterday · Completed', 'నిన్న · ముగిసింది') : t('Completed', 'ముగిసింది')}</Text>
+                                </View>
+                              ) : null}
+                            </View>
+
+                            {matchTime ? (
+                              <View style={[
+                                styles.cricketTimeHighlightPill,
+                                match.isLive && styles.cricketTimeHighlightPillLive,
+                                isUpcoming && styles.cricketTimeHighlightPillUpcoming,
+                              ]}>
+                                <Ionicons
+                                  name="time"
+                                  size={12}
+                                  color={match.isLive ? '#DC2626' : isUpcoming ? '#0284C7' : '#64748B'}
+                                />
+                                <Text style={[
+                                  styles.cricketTimeHighlightText,
+                                  match.isLive && styles.cricketTimeHighlightTextLive,
+                                  isUpcoming && styles.cricketTimeHighlightTextUpcoming,
+                                ]} numberOfLines={1}>
+                                  {matchTime}
+                                </Text>
+                              </View>
+                            ) : null}
+
+                            <Text style={styles.cricketMatchTitle} numberOfLines={1}>{match.title}</Text>
+
+                            <View style={styles.cricketTeamsContainer}>
+                              <View style={styles.cricketTeamRow}>
+                                <View style={styles.cricketTeamNameRow}>
+                                  <View style={[styles.cricketTeamAvatar, { backgroundColor: match.team1.color || '#1E40AF' }]}>
+                                    <Text style={styles.cricketTeamAvatarText}>{(match.team1.shortName || match.team1.name).slice(0, 3).toUpperCase()}</Text>
+                                  </View>
+                                  <Text style={styles.cricketTeamName} numberOfLines={1}>
+                                    {match.team1.shortName || match.team1.name}
+                                  </Text>
+                                </View>
+                                <View style={styles.cricketScoreWrap}>
+                                  <Text style={[styles.cricketScore, formatTeamScore(match.team1.score) === '—' && styles.cricketScoreEmpty]}>
+                                    {formatTeamScore(match.team1.score)}
+                                  </Text>
+                                  {match.team1.overs ? (
+                                    <Text style={styles.cricketOvers}>({match.team1.overs})</Text>
+                                  ) : null}
+                                </View>
+                              </View>
+
+                              <View style={styles.cricketTeamRow}>
+                                <View style={styles.cricketTeamNameRow}>
+                                  <View style={[styles.cricketTeamAvatar, { backgroundColor: match.team2.color || '#B91C1C' }]}>
+                                    <Text style={styles.cricketTeamAvatarText}>{(match.team2.shortName || match.team2.name).slice(0, 3).toUpperCase()}</Text>
+                                  </View>
+                                  <Text style={styles.cricketTeamName} numberOfLines={1}>
+                                    {match.team2.shortName || match.team2.name}
+                                  </Text>
+                                </View>
+                                <View style={styles.cricketScoreWrap}>
+                                  <Text style={[styles.cricketScore, formatTeamScore(match.team2.score) === '—' && styles.cricketScoreEmpty]}>
+                                    {formatTeamScore(match.team2.score)}
+                                  </Text>
+                                  {match.team2.overs ? (
+                                    <Text style={styles.cricketOvers}>({match.team2.overs})</Text>
+                                  ) : null}
+                                </View>
+                              </View>
+                            </View>
+
+                            {statusText ? (
+                              <View style={[
+                                styles.cricketStatusRow,
+                                match.isLive && styles.cricketStatusRowLive,
+                                isUpcoming && styles.cricketStatusRowUpcoming,
+                              ]}>
+                                <Text style={[
+                                  styles.cricketStatusText,
+                                  match.isLive && styles.cricketStatusLiveText,
+                                  isUpcoming && styles.cricketStatusUpcomingText,
+                                ]} numberOfLines={1}>
+                                  {statusText}
+                                </Text>
+                                <Ionicons name="chevron-forward" size={13} color={match.isLive ? '#DC2626' : isUpcoming ? '#0284C7' : '#9CA3AF'} />
+                              </View>
+                            ) : null}
+                          </Pressable>
+                        )
+                      })}
+                      </ScrollView>
+                      {width >= 600 && (
+                        <Pressable
+                          style={[styles.cricketRailArrow, activeCricketIndex >= Math.max(0, cricketMatches.length - 2) && styles.cricketRailArrowDisabled]}
+                          disabled={activeCricketIndex >= Math.max(0, cricketMatches.length - 2)}
+                          onPress={() => {
+                            const maxIndex = Math.max(0, cricketMatches.length - 2)
+                            const nextIndex = Math.min(maxIndex, activeCricketIndex + 1)
+                            cricketRailRef.current?.scrollTo({ x: nextIndex * (cricketCardWidth + cricketCardGap), animated: true })
+                            setActiveCricketIndex(nextIndex)
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel={t('Next matches', 'తదుపరి మ్యాచ్‌లు')}
+                        >
+                          <Ionicons name="chevron-forward" size={16} color="#475569" />
+                        </Pressable>
+                      )}
+                    </View>
+
+                    {cricketMatches.length > 1 && (
+                      <View style={styles.cricketRailFooter}>
+                        <Text style={styles.cricketSwipeHint}>{t('Swipe to see more matches', 'మరిన్ని మ్యాచ్‌ల కోసం స్వైప్ చేయండి')}</Text>
+                        <View style={styles.cricketPaginationDots}>
+                        {cricketMatches.map((m, idx) => (
+                          <Pressable
+                            key={m.id}
+                            onPress={() => {
+                              const step = cricketCardWidth + cricketCardGap
+                              cricketRailRef.current?.scrollTo({ x: idx * step, animated: true })
+                              setActiveCricketIndex(idx)
+                            }}
+                            style={[
+                              styles.cricketPaginationDot,
+                              idx === activeCricketIndex && styles.cricketPaginationDotActive,
+                              idx === activeCricketIndex && m.isLive && styles.cricketPaginationDotLive,
+                            ]}
+                          />
+                        ))}
+                        </View>
+                      </View>
+                    )}
+                    </>}
+                  </View>
+                )}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         {activeAnnouncements.length > 0 && (
           <>
@@ -426,7 +912,7 @@ export default function Home({ navigation }: any) {
                             <View style={styles.utilityModalHeroCopy}>
                 <Text style={styles.utilityModalKicker}>{selectedUtility === 'weather' ? t('Today’s weather', 'ఈరోజు వాతావరణం') : t('Gold rate today', 'ఈరోజు బంగారం ధర')}</Text>
                 <Text style={styles.utilityModalHeroValue}>{selectedUtility === 'weather' ? (weather?.temp || t('Unavailable', 'అందుబాటులో లేదు')) : (gold ? `₹${gold.pricePerSavaram22K.toLocaleString('en-IN')}` : t('Unavailable', 'అందుబాటులో లేదు'))}</Text>
-                <Text style={styles.utilityModalHeroDetail}>{selectedUtility === 'weather' ? (weather ? `${weather.condition}${rainWindow ? ` · 🌧 ${rainWindow.timeRange}` : ` · ${weather.humidity}`}` : (weather?.locationName || t('Live location', 'లైవ్ లొకేషన్'))) : t('22K · 8g (Savaram)', '22K · 8 గ్రాములు (సవరం)')}</Text>
+                <Text style={styles.utilityModalHeroDetail}>{selectedUtility === 'weather' ? (weather ? `${weather.condition}${rainWindow ? ` · 🌧 ${rainWindow.timeRange}` : ` · ${weather.humidity}`}` : t('Live location', 'లైవ్ లొకేషన్')) : t('22K · 8g (Savaram)', '22K · 8 గ్రాములు (సవరం)')}</Text>
               </View>
             </View>
             {selectedUtility === 'weather' ? (
@@ -474,7 +960,7 @@ export default function Home({ navigation }: any) {
           </View>
         </View>
       </Modal>
-      <Modal visible={selectedUpdate !== null} transparent animationType="fade" onRequestClose={() => setSelectedUpdate(null)}>
+            <Modal visible={selectedUpdate !== null} transparent animationType="fade" onRequestClose={() => setSelectedUpdate(null)}>
         <View style={styles.modalBackdrop}>
           {selectedUpdate && (
             <View style={styles.announcementModal}>
@@ -490,6 +976,263 @@ export default function Home({ navigation }: any) {
               </View>
             </View>
           )}
+        </View>
+      </Modal>
+            <Modal visible={selectedCricketMatch !== null} transparent animationType="fade" onRequestClose={() => setSelectedCricketMatch(null)}>
+        <View style={styles.modalBackdrop}>
+          {selectedCricketMatch ? (
+            <View style={styles.cricketModal}>
+              <View style={styles.cricketModalHero}>
+                <View style={styles.cricketModalHeroHeader}>
+                  <View style={styles.cricketModalBadgeRow}>
+                    {(() => {
+                      const modalFormatType = normalizeFormatName(selectedCricketMatch.matchType)
+                      const modalSeries = normalizeFormatName(selectedCricketMatch.series)
+                      const showModalSeries = Boolean(modalSeries && modalSeries.toLowerCase() !== modalFormatType.toLowerCase())
+                      const modalFormatStyle = getFormatBadgeStyle(modalFormatType)
+
+                      return (
+                        <>
+                          {modalFormatType ? (
+                            <View style={[styles.cricketFormatBadge, { backgroundColor: modalFormatStyle.bg, borderColor: modalFormatStyle.border }]}>
+                              <Text style={[styles.cricketFormatText, { color: modalFormatStyle.text }]}>{modalFormatType}</Text>
+                            </View>
+                          ) : null}
+                          {showModalSeries ? (
+                            <View style={styles.cricketModalSeriesPill}>
+                              <Text style={styles.cricketModalSeriesText}>{modalSeries}</Text>
+                            </View>
+                          ) : null}
+                        </>
+                      )
+                    })()}
+                    {selectedCricketMatch.isLive ? (
+                      <View style={styles.cricketLiveBadge}>
+                        <View style={styles.cricketLiveDot} />
+                        <Text style={styles.cricketLiveText}>{t('LIVE', 'లైవ్')}</Text>
+                      </View>
+                    ) : selectedCricketMatch.state === 'upcoming' ? (
+                      <View style={styles.cricketEndedPill}>
+                        <Text style={styles.cricketEndedPillText}>{t('Upcoming', 'రాబోయేది')}</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.cricketEndedPill}>
+                        <Text style={styles.cricketEndedPillText}>{selectedCricketMatch.dayLabel === 'yesterday' ? t('Yesterday · Completed', 'నిన్న · ముగిసింది') : t('Completed', 'ముగిసింది')}</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t('Close match details', 'మ్యాచ్ వివరాలను మూసివేయండి')}
+                    hitSlop={8}
+                    style={styles.cricketModalClose}
+                    onPress={() => setSelectedCricketMatch(null)}
+                  >
+                    <Ionicons name="close" size={20} color="#FFFFFF" />
+                  </Pressable>
+                </View>
+
+                <Text style={styles.cricketModalHeroTitle}>{selectedCricketMatch.title}</Text>
+                {selectedCricketMatch.venue ? (
+                  <View style={styles.cricketModalHeroVenueRow}>
+                    <Ionicons name="location-sharp" size={13} color="#94A3B8" />
+                    <Text style={styles.cricketModalHeroVenueText}>{selectedCricketMatch.venue}</Text>
+                  </View>
+                ) : null}
+                <View style={styles.cricketModalMetaRow}>
+                  {selectedCricketMatch.matchNumber ? <Text style={styles.cricketModalMetaText}>{selectedCricketMatch.matchNumber}</Text> : null}
+                  {selectedCricketMatch.group ? <Text style={styles.cricketModalMetaText}>{selectedCricketMatch.group}</Text> : null}
+                  {(selectedCricketMatch.dateTime || selectedCricketMatch.startTime) ? (
+                    <View style={styles.cricketModalTimeHighlight}>
+                      <Ionicons name="time" size={12} color="#38BDF8" />
+                      <Text style={styles.cricketModalTimeHighlightText}>{formatCricketDateTime(selectedCricketMatch.dateTime || selectedCricketMatch.startTime) || selectedCricketMatch.startTime}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+
+              <ScrollView style={styles.cricketModalBody} showsVerticalScrollIndicator={false}>
+                <View style={styles.cricketModalScoreCard}>
+                  <View style={styles.cricketModalTeamRow}>
+                    <View style={styles.cricketModalTeamInfo}>
+                      <View style={[styles.cricketTeamAvatarBig, { backgroundColor: selectedCricketMatch.team1.color || '#1E40AF' }]}>
+                        <Text style={styles.cricketTeamAvatarBigText}>{(selectedCricketMatch.team1.shortName || selectedCricketMatch.team1.name).slice(0, 3).toUpperCase()}</Text>
+                      </View>
+                      <View>
+                        <Text style={styles.cricketModalTeamName}>{selectedCricketMatch.team1.name}</Text>
+                        <Text style={styles.cricketModalTeamShort}>{selectedCricketMatch.team1.shortName}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.cricketModalScoreWrap}>
+                      <Text style={[styles.cricketModalScore, formatTeamScore(selectedCricketMatch.team1.score) === '—' && styles.cricketScoreEmpty]}>{formatTeamScore(selectedCricketMatch.team1.score)}</Text>
+                      {selectedCricketMatch.team1.overs ? (
+                        <Text style={styles.cricketModalOvers}>({selectedCricketMatch.team1.overs})</Text>
+                      ) : null}
+                    </View>
+                  </View>
+
+                  <View style={styles.cricketModalDivider} />
+
+                  <View style={styles.cricketModalTeamRow}>
+                    <View style={styles.cricketModalTeamInfo}>
+                      <View style={[styles.cricketTeamAvatarBig, { backgroundColor: selectedCricketMatch.team2.color || '#B91C1C' }]}>
+                        <Text style={styles.cricketTeamAvatarBigText}>{(selectedCricketMatch.team2.shortName || selectedCricketMatch.team2.name).slice(0, 3).toUpperCase()}</Text>
+                      </View>
+                      <View>
+                        <Text style={styles.cricketModalTeamName}>{selectedCricketMatch.team2.name}</Text>
+                        <Text style={styles.cricketModalTeamShort}>{selectedCricketMatch.team2.shortName}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.cricketModalScoreWrap}>
+                      <Text style={[styles.cricketModalScore, formatTeamScore(selectedCricketMatch.team2.score) === '—' && styles.cricketScoreEmpty]}>{formatTeamScore(selectedCricketMatch.team2.score)}</Text>
+                      {selectedCricketMatch.team2.overs ? (
+                        <Text style={styles.cricketModalOvers}>({selectedCricketMatch.team2.overs})</Text>
+                      ) : null}
+                    </View>
+                  </View>
+                </View>
+
+                {Boolean(formatMatchStatus(selectedCricketMatch.status, selectedCricketMatch.isLive, selectedCricketMatch.state === 'upcoming')) && (
+                  <View style={[styles.cricketModalStatusBanner, selectedCricketMatch.isLive ? styles.cricketModalStatusBannerLive : styles.cricketModalStatusBannerDone]}>
+                    <Ionicons name={selectedCricketMatch.isLive ? 'flash' : 'checkmark-circle'} size={15} color={selectedCricketMatch.isLive ? '#DC2626' : '#059669'} />
+                    <Text style={[styles.cricketModalStatusText, selectedCricketMatch.isLive ? styles.cricketModalStatusTextLive : styles.cricketModalStatusTextDone]}>
+                      {formatMatchStatus(selectedCricketMatch.status, selectedCricketMatch.isLive, selectedCricketMatch.state === 'upcoming')}
+                    </Text>
+                  </View>
+                )}
+
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cricketTabs}>
+                  {[
+                    ['info', 'Info'], ['live', 'Live'], ['scorecard', 'Scorecard'], ['squads', 'Squads'], ['full-commentary', 'Full Commentary'],
+                  ].map(([tab, label], index) => (
+                    <Pressable key={`${label}-${index}`} style={[styles.cricketTab, activeCricketTab === tab && styles.cricketTabActive]} onPress={() => setActiveCricketTab(tab)}>
+                      <Text style={[styles.cricketTabText, activeCricketTab === tab && styles.cricketTabTextActive]}>{label}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+
+                {activeCricketTab === 'scorecard' && selectedCricketMatch.innings?.length ? (
+                  <View style={styles.cricketInningsCard}>
+                    <Text style={styles.cricketInningsHeading}>{t('Scorecard', 'స్కోర్‌కార్డ్')}</Text>
+                    {selectedCricketMatch.innings.map((inning, index) => (
+                      <View key={`${inning.team}-${index}`} style={styles.cricketInningsRow}>
+                        <View style={styles.cricketInningsTeam}>
+                          <Text style={styles.cricketInningsTeamName} numberOfLines={1}>{inning.team}</Text>
+                          <Text style={styles.cricketInningsMeta}>{inning.overs !== '—' ? `${inning.overs} ov` : t('Overs unavailable', 'ఓవర్లు అందుబాటులో లేవు')}</Text>
+                        </View>
+                        <View style={styles.cricketInningsScore}>
+                          <Text style={styles.cricketInningsRuns}>{inning.score}</Text>
+                          {inning.runRate ? <Text style={styles.cricketInningsMeta}>RR {inning.runRate}</Text> : null}
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+
+                {activeCricketTab === 'scorecard' && !selectedCricketMatch.innings?.length ? (
+                  <View style={styles.cricketCommentaryEmpty}><Ionicons name="stats-chart-outline" size={18} color="#64748B" /><Text style={styles.cricketCommentaryEmptyText}>{t('Detailed scorecard data is not available in this feed.', 'ఈ ఫీడ్‌లో వివరమైన స్కోర్‌కార్డ్ అందుబాటులో లేదు.')}</Text></View>
+                ) : null}
+
+                {activeCricketTab === 'info' ? (
+                  <View style={styles.cricketInfoCard}>
+                    <Text style={styles.cricketInPlayHeading}>{t('Match information', 'మ్యాచ్ సమాచారం')}</Text>
+                    {selectedCricketMatch.series ? <Text style={styles.cricketInfoLine}><Text style={styles.cricketInfoLabel}>{t('Series', 'సిరీస్')}</Text>{selectedCricketMatch.series}</Text> : null}
+                    {selectedCricketMatch.venue ? <Text style={styles.cricketInfoLine}><Text style={styles.cricketInfoLabel}>{t('Venue', 'వేదిక')}</Text>{selectedCricketMatch.venue}</Text> : null}
+                    {selectedCricketMatch.dateTime || selectedCricketMatch.startTime ? <Text style={styles.cricketInfoLine}><Text style={styles.cricketInfoLabel}>{t('Date and time', 'తేదీ మరియు సమయం')}</Text>{formatCricketDateTime(selectedCricketMatch.dateTime || selectedCricketMatch.startTime)}</Text> : null}
+                    {selectedCricketMatch.playerOfMatch ? <View style={styles.cricketPlayerCard}><Ionicons name="trophy-outline" size={18} color="#D97706" /><View><Text style={styles.cricketInPlayRole}>{t('Player of the Match', 'మ్యాచ్ ప్లేయర్')}</Text><Text style={styles.cricketInPlayName}>{selectedCricketMatch.playerOfMatch}</Text></View></View> : null}
+                  </View>
+                ) : null}
+
+                {(activeCricketTab === 'live' || activeCricketTab === 'full-commentary') && !selectedCricketMatch.isLive ? (
+                  <View style={styles.cricketCommentaryEmpty}><Ionicons name="time-outline" size={18} color="#64748B" /><Text style={styles.cricketCommentaryEmptyText}>{t('This match is not live. Commentary will appear here when the feed provides it.', 'ఈ మ్యాచ్ లైవ్‌లో లేదు. ఫీడ్‌లో అందుబాటులో ఉన్నప్పుడు కామెంటరీ ఇక్కడ కనిపిస్తుంది.')}</Text></View>
+                ) : null}
+
+                {selectedCricketMatch.isLive && selectedCricketMatch.cricbuzzUrl ? (
+                  <Pressable
+                    accessibilityRole="link"
+                    style={styles.cricketLiveFeedButton}
+                    onPress={() => Linking.openURL(selectedCricketMatch.cricbuzzUrl as string)}
+                  >
+                    <Ionicons name="radio-outline" size={16} color="#FFFFFF" />
+                    <Text style={styles.cricketLiveFeedButtonText}>{t('Open live commentary', 'లైవ్ కామెంటరీ తెరవండి')}</Text>
+                    <Ionicons name="arrow-forward" size={15} color="#FFFFFF" />
+                  </Pressable>
+                ) : null}
+
+                {activeCricketTab === 'live' && (selectedCricketMatch.currentBatter || selectedCricketMatch.currentBowler) && (
+                  <View style={styles.cricketInPlayContainer}>
+                    <Text style={styles.cricketInPlayHeading}>{t('Live In-Play', 'లైవ్ ఆట')}</Text>
+                    {selectedCricketMatch.currentBatter ? (
+                      <View style={styles.cricketInPlayCard}>
+                        <View style={styles.cricketInPlayIconBat}>
+                          <Ionicons name="flash" size={14} color="#D97706" />
+                        </View>
+                        <View style={styles.cricketInPlayContent}>
+                          <Text style={styles.cricketInPlayRole}>{t('Batting', 'బ్యాటింగ్')}</Text>
+                          <Text style={styles.cricketInPlayName}>{selectedCricketMatch.currentBatter}</Text>
+                        </View>
+                      </View>
+                    ) : null}
+
+                    {selectedCricketMatch.currentBowler ? (
+                      <View style={styles.cricketInPlayCard}>
+                        <View style={styles.cricketInPlayIconBowl}>
+                          <Ionicons name="baseball" size={14} color="#2563EB" />
+                        </View>
+                        <View style={styles.cricketInPlayContent}>
+                          <Text style={styles.cricketInPlayRole}>{t('Bowling', 'బౌలింగ్')}</Text>
+                          <Text style={styles.cricketInPlayName}>{selectedCricketMatch.currentBowler}</Text>
+                        </View>
+                      </View>
+                    ) : null}
+                  </View>
+                )}
+
+                {(activeCricketTab === 'live' || activeCricketTab === 'full-commentary') && selectedCricketMatch.isLive && (selectedCricketMatch.recentBalls?.length || selectedCricketMatch.commentary?.length) ? (
+                  <View style={styles.cricketCommentarySection}>
+                    <View style={styles.cricketCommentaryHeadingRow}>
+                      <Text style={styles.cricketInPlayHeading}>{t('Live commentary', 'లైవ్ కామెంటరీ')}</Text>
+                      <View style={styles.cricketCommentaryLivePill}>
+                        <View style={styles.cricketLiveDot} />
+                        <Text style={styles.cricketCommentaryLiveText}>{t('LIVE', 'లైవ్')}</Text>
+                      </View>
+                    </View>
+                    {selectedCricketMatch.recentBalls?.length ? (
+                      <View style={styles.cricketRecentBalls}>
+                        {selectedCricketMatch.recentBalls.slice(-6).map((ball, index) => (
+                          <View key={`${ball}-${index}`} style={[styles.cricketBall, ball === 'W' && styles.cricketBallWicket, (ball === '4' || ball === '6') && styles.cricketBallBoundary]}>
+                            <Text style={styles.cricketBallText}>{ball}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
+                    {selectedCricketMatch.commentary?.slice(0, 6).map((item, index) => (
+                      <View key={`${item.over}-${index}`} style={styles.cricketCommentaryItem}>
+                        <Text style={[styles.cricketCommentaryOver, item.isWicket && styles.cricketCommentaryWicket]}>{item.over}</Text>
+                        <Text style={styles.cricketCommentaryText}>{item.comm}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (activeCricketTab === 'live' || activeCricketTab === 'full-commentary') && selectedCricketMatch.isLive ? (
+                  <View style={styles.cricketCommentaryEmpty}>
+                    <Ionicons name="radio-outline" size={18} color="#64748B" />
+                    <Text style={styles.cricketCommentaryEmptyText}>{t('Live ball-by-ball commentary is not available in this feed yet.', 'ఈ ఫీడ్‌లో బాల్-బై-బాల్ లైవ్ కామెంటరీ ఇంకా అందుబాటులో లేదు.')}</Text>
+                  </View>
+                ) : null}
+
+                {!['live', 'info', 'scorecard', 'full-commentary'].includes(activeCricketTab) ? (
+                  <View style={styles.cricketCommentaryEmpty}><Ionicons name="information-circle-outline" size={18} color="#64748B" /><Text style={styles.cricketCommentaryEmptyText}>{t('This tab is not available in the current cricket feed.', 'ప్రస్తుత క్రికెట్ ఫీడ్‌లో ఈ ట్యాబ్ అందుబాటులో లేదు.')}</Text></View>
+                ) : null}
+
+                {selectedCricketMatch.summary ? (
+                  <View style={styles.cricketModalSummaryBox}>
+                    <Ionicons name="information-circle-outline" size={16} color="#475569" style={{ marginTop: 1 }} />
+                    <Text style={styles.cricketModalSummaryText}>{selectedCricketMatch.summary}</Text>
+                  </View>
+                ) : null}
+              </ScrollView>
+            </View>
+          ) : null}
         </View>
       </Modal>
       <BottomNav navigation={navigation} active="Home" />
@@ -734,8 +1477,397 @@ const styles = StyleSheet.create({
   updateModalVersion: { color: '#5661B8', fontSize: 14, fontWeight: '800', marginBottom: 12 },
   updateModalNotes: { color: '#5F5B58', fontSize: 14, lineHeight: 20, marginBottom: 20 },
   updateModalActions: { flexDirection: 'column', gap: 10 },
-  updateModalButton: { paddingVertical: 14, paddingHorizontal: 16, backgroundColor: '#5661B8', borderRadius: 10, alignItems: 'center' },
+    updateModalButton: { paddingVertical: 14, paddingHorizontal: 16, backgroundColor: '#5661B8', borderRadius: 10, alignItems: 'center' },
   updateModalButtonText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
   updateModalButtonSecondary: { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#5661B8' },
   updateModalButtonTextSecondary: { color: '#5661B8', fontSize: 16, fontWeight: '800' },
+  cricketSection: { marginTop: 6, marginBottom: 6 },
+  cricketHeadingRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  cricketIconWrap: { width: 26, height: 26, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#FEF3C7' },
+  cricketHeaderLiveBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 3, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 10, backgroundColor: '#FEE2E2' },
+  cricketHeaderLiveText: { color: '#DC2626', fontSize: 9, fontWeight: '900', letterSpacing: 0.4 },
+  cricketSectionIcon: { fontSize: 20 },
+  cricketRailWrap: { flexDirection: 'row', alignItems: 'center' },
+  cricketRail: { gap: cricketCardGap, paddingRight: 4, paddingVertical: 4 },
+  cricketRailArrow: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', marginHorizontal: 2, borderRadius: 15, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0' },
+  cricketRailArrowDisabled: { opacity: 0.35 },
+  cricketRailFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 24, marginTop: 2 },
+  cricketSwipeHint: { color: '#7C8496', fontSize: 10, fontWeight: '700' },
+  cricketPaginationDots: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  cricketPaginationDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#CBD5E1' },
+  cricketPaginationDotActive: { width: 18, backgroundColor: '#3B82F6' },
+  cricketPaginationDotLive: { backgroundColor: '#EF4444' },
+  cricketCard: {
+    padding: 10,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+    overflow: 'hidden',
+  },
+  cricketCardLive: {
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#EF4444',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  cricketCardUpcoming: {
+    borderColor: '#93C5FD',
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#3B82F6',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+  cricketCardTopLiveBar: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    left: 0,
+    height: 3.5,
+    backgroundColor: '#EF4444',
+  },
+  cricketCardTopUpcomingBar: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    left: 0,
+    height: 3.5,
+    backgroundColor: '#0284C7',
+  },
+  cricketCardTopDefaultBar: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    left: 0,
+    height: 3.5,
+    backgroundColor: '#CBD5E1',
+  },
+  cricketCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 4,
+    marginBottom: 6,
+    marginTop: 2,
+  },
+  cricketHeaderTagsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    flex: 1,
+    marginRight: 4,
+  },
+  cricketFormatBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 5,
+    borderWidth: 1,
+  },
+  cricketFormatText: {
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+  },
+  cricketSeriesBadge: {
+    flexShrink: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 5,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  cricketSeriesIcon: {
+    marginRight: 2,
+  },
+  cricketSeriesText: {
+    color: '#92400E',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  cricketLiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2.5,
+    borderRadius: 8,
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+  },
+  cricketLiveDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#EF4444',
+  },
+  cricketLiveText: {
+    color: '#DC2626',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+  },
+  cricketUpcomingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2.5,
+    borderRadius: 8,
+    backgroundColor: '#E0F2FE',
+    borderWidth: 1,
+    borderColor: '#38BDF8',
+  },
+  cricketUpcomingIcon: {
+    marginRight: 2,
+  },
+  cricketUpcomingText: {
+    color: '#0284C7',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+  },
+  cricketTimeBadge: {
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: '#E0F2FE',
+  },
+  cricketEndedBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3.5,
+    borderRadius: 10,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  cricketEndedText: {
+    color: '#64748B',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  cricketStartTimeText: {
+    color: '#0369A1',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  cricketTimeHighlightPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4.5,
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 8,
+  },
+  cricketTimeHighlightPillLive: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FCA5A5',
+  },
+  cricketTimeHighlightPillUpcoming: {
+    backgroundColor: '#F0F9FF',
+    borderColor: '#BAE6FD',
+  },
+  cricketTimeHighlightText: {
+    color: '#475569',
+    fontSize: 11,
+    fontWeight: '800',
+    flexShrink: 1,
+  },
+  cricketTimeHighlightTextLive: {
+    color: '#B91C1C',
+  },
+  cricketTimeHighlightTextUpcoming: {
+    color: '#0369A1',
+  },
+  cricketMatchTitle: {
+    marginBottom: 10,
+    color: '#475569',
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 15,
+  },
+  cricketTeamsContainer: {
+    gap: 10,
+    marginVertical: 4,
+  },
+  cricketTeamRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  cricketTeamNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+    marginRight: 8,
+  },
+  cricketTeamAvatar: {
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 15,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  cricketTeamAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  cricketTeamDot: { width: 8, height: 8, borderRadius: 4 },
+  cricketTeamDotBig: { width: 12, height: 12, borderRadius: 6 },
+  cricketTeamName: { color: '#0F172A', fontSize: 14, fontWeight: '800' },
+  cricketScoreWrap: { flexDirection: 'row', alignItems: 'baseline', gap: 5, justifyContent: 'flex-end' },
+  cricketScore: { color: '#0F172A', fontSize: 14, fontWeight: '900' },
+  cricketScoreEmpty: { color: '#94A3B8', fontWeight: '600' },
+  cricketOvers: { color: '#64748B', fontSize: 11, fontWeight: '600' },
+  cricketStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+  },
+  cricketStatusRowLive: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FEE2E2',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderTopWidth: 1,
+    marginTop: 10,
+  },
+  cricketStatusRowUpcoming: {
+    backgroundColor: '#F0F9FF',
+    borderColor: '#E0F2FE',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderTopWidth: 1,
+    marginTop: 10,
+  },
+  cricketStatusText: { flex: 1, color: '#475569', fontSize: 11, fontWeight: '700' },
+  cricketStatusLiveText: { color: '#DC2626', fontWeight: '800' },
+  cricketStatusUpcomingText: { color: '#0284C7', fontWeight: '800' },
+  cricketModal: { width: '100%', maxWidth: 440, maxHeight: '85%', overflow: 'hidden', borderRadius: 20, backgroundColor: '#FFFFFF', padding: 20 },
+  cricketModalHero: { marginHorizontal: -20, marginTop: -20, marginBottom: 14, padding: 20, paddingTop: 18, backgroundColor: '#172033' },
+  cricketModalHeroHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  cricketModalSeriesPill: { maxWidth: 170, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: '#E0E7FF' },
+  cricketModalSeriesText: { color: '#3730A3', fontSize: 10, fontWeight: '800' },
+  cricketModalTypePill: { paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6, backgroundColor: '#334155' },
+  cricketModalTypeText: { color: '#E2E8F0', fontSize: 10, fontWeight: '800' },
+  cricketEndedPill: { paddingHorizontal: 7, paddingVertical: 4, borderRadius: 8, backgroundColor: '#334155' },
+  cricketEndedPillText: { color: '#CBD5E1', fontSize: 10, fontWeight: '800' },
+  cricketModalClose: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', marginTop: -4, marginRight: -4, borderRadius: 17, backgroundColor: '#334155' },
+  cricketModalHeroTitle: { marginTop: 15, color: '#FFFFFF', fontSize: 19, lineHeight: 25, fontWeight: '900' },
+  cricketModalHeroVenueRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 },
+  cricketModalHeroVenueText: { flex: 1, color: '#CBD5E1', fontSize: 11, fontWeight: '600' },
+  cricketModalMetaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
+  cricketModalMetaText: { color: '#94A3B8', fontSize: 10, fontWeight: '700' },
+  cricketModalTimeHighlight: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, backgroundColor: '#1E293B' },
+  cricketModalTimeHighlightText: { color: '#38BDF8', fontSize: 11, fontWeight: '800' },
+  cricketModalHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 },
+  cricketModalTitleWrap: { flex: 1, marginRight: 12 },
+  cricketModalBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' },
+  cricketModalSeries: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, backgroundColor: '#EEF2FF', color: '#4F46E5', fontSize: 11, fontWeight: '800' },
+  cricketModalType: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, backgroundColor: '#F3F4F6', color: '#4B5563', fontSize: 11, fontWeight: '800' },
+  cricketModalTitle: { color: '#111827', fontSize: 17, fontWeight: '900', lineHeight: 22 },
+  cricketModalBody: { maxHeight: 380 },
+  cricketModalScoreCard: { padding: 14, borderRadius: 14, backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#F3F4F6', marginBottom: 12 },
+  cricketInningsCard: { marginBottom: 12, padding: 14, borderRadius: 14, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0' },
+  cricketInningsHeading: { marginBottom: 8, color: '#1E293B', fontSize: 13, fontWeight: '900' },
+  cricketInningsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#E2E8F0' },
+  cricketInningsTeam: { flex: 1, marginRight: 12 },
+  cricketInningsTeamName: { color: '#334155', fontSize: 12, fontWeight: '800' },
+  cricketInningsMeta: { marginTop: 2, color: '#64748B', fontSize: 10, fontWeight: '600' },
+  cricketInningsScore: { alignItems: 'flex-end' },
+  cricketInningsRuns: { color: '#0F172A', fontSize: 15, fontWeight: '900' },
+  cricketModalTeamRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 },
+  cricketModalTeamInfo: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, marginRight: 8 },
+  cricketTeamAvatarBig: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 18 },
+  cricketTeamAvatarBigText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
+  cricketModalTeamName: { color: '#111827', fontSize: 15, fontWeight: '800' },
+  cricketModalTeamShort: { marginTop: 2, color: '#64748B', fontSize: 10, fontWeight: '700' },
+  cricketModalScoreWrap: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
+  cricketModalScore: { color: '#111827', fontSize: 16, fontWeight: '900' },
+  cricketModalOvers: { color: '#6B7280', fontSize: 12, fontWeight: '600' },
+  cricketModalDivider: { height: 1, backgroundColor: '#E5E7EB', marginVertical: 6 },
+  cricketModalStatusBanner: { padding: 10, borderRadius: 10, backgroundColor: '#FEF3C7', marginBottom: 12 },
+  cricketModalStatusBannerLive: { backgroundColor: '#FEF2F2' },
+  cricketModalStatusBannerDone: { backgroundColor: '#ECFDF5' },
+  cricketModalStatusText: { color: '#92400E', fontSize: 13, fontWeight: '800', textAlign: 'center' },
+  cricketModalStatusTextLive: { color: '#B91C1C' },
+  cricketModalStatusTextDone: { color: '#047857' },
+  cricketLiveFeedButton: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14, paddingHorizontal: 13, paddingVertical: 11, borderRadius: 10, backgroundColor: '#DC2626' },
+  cricketLiveFeedButtonText: { flex: 1, color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
+  cricketInPlayContainer: { marginBottom: 4 },
+  cricketInPlayHeading: { color: '#1E293B', fontSize: 13, fontWeight: '900' },
+  cricketInPlayCard: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 8, padding: 10, borderRadius: 10, backgroundColor: '#F8FAFC' },
+  cricketInPlayIconBat: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#FEF3C7' },
+  cricketInPlayIconBowl: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#DBEAFE' },
+  cricketInPlayContent: { flex: 1 },
+  cricketInPlayRole: { color: '#64748B', fontSize: 10, fontWeight: '800' },
+  cricketInPlayName: { marginTop: 2, color: '#1E293B', fontSize: 12, fontWeight: '800' },
+  cricketCommentarySection: { marginTop: 14 },
+  cricketCommentaryHeadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  cricketCommentaryLivePill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 8, backgroundColor: '#FEE2E2' },
+  cricketCommentaryLiveText: { color: '#DC2626', fontSize: 9, fontWeight: '900' },
+  cricketRecentBalls: { flexDirection: 'row', gap: 7, marginTop: 9, marginBottom: 6 },
+  cricketBall: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: '#E2E8F0' },
+  cricketBallBoundary: { backgroundColor: '#DBEAFE' },
+  cricketBallWicket: { backgroundColor: '#FEE2E2' },
+  cricketBallText: { color: '#334155', fontSize: 11, fontWeight: '900' },
+  cricketCommentaryItem: { flexDirection: 'row', gap: 9, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  cricketCommentaryOver: { width: 30, color: '#64748B', fontSize: 11, fontWeight: '900' },
+  cricketCommentaryWicket: { color: '#DC2626' },
+  cricketCommentaryText: { flex: 1, color: '#475569', fontSize: 11, lineHeight: 16, fontWeight: '600' },
+  cricketCommentaryEmpty: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, padding: 12, borderRadius: 10, backgroundColor: '#F1F5F9' },
+  cricketCommentaryEmptyText: { flex: 1, color: '#64748B', fontSize: 11, lineHeight: 16, fontWeight: '600' },
+  cricketModalDetailRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6 },
+  cricketModalDetailLabel: { color: '#6B7280', fontSize: 12, fontWeight: '700' },
+  cricketModalDetailValue: { color: '#111827', fontSize: 13, fontWeight: '800', flex: 1 },
+  cricketModalSummaryBox: { marginTop: 10, padding: 12, borderRadius: 10, backgroundColor: '#F3F4F6' },
+  cricketModalSummaryText: { color: '#4B5563', fontSize: 12, lineHeight: 17, fontWeight: '600' },
+  cricketModalVenueRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 12, paddingBottom: 4 },
+  cricketModalVenueText: { color: '#9CA3AF', fontSize: 11, fontWeight: '600' },
+  cricketTabs: { gap: 18, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#E2E8F0', marginBottom: 14 },
+  cricketTab: { paddingBottom: 7 },
+  cricketTabActive: { borderBottomWidth: 2, borderBottomColor: '#DC2626' },
+  cricketTabText: { color: '#64748B', fontSize: 11, fontWeight: '800' },
+  cricketTabTextActive: { color: '#DC2626' },
+  cricketInfoCard: { padding: 14, borderRadius: 14, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0' },
+  cricketInfoLine: { marginTop: 10, color: '#334155', fontSize: 12, lineHeight: 17, fontWeight: '700' },
+  cricketInfoLabel: { color: '#64748B', fontWeight: '800' },
+  cricketPlayerCard: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#E2E8F0' },
 })

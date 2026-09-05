@@ -173,7 +173,7 @@ export default function SubmitBusiness({ navigation, route }: any) {
     }
   }
 
-  const updateManualCoordinates = async (field: 'latitude' | 'longitude', value: string) => {
+  const updateManualCoordinates = (field: 'latitude' | 'longitude', value: string) => {
     const nextValue = value.trim()
     const latitudeSource = manualLatitude !== '' ? Number(manualLatitude) : (currentCoordinates?.latitude ?? 0)
     const longitudeSource = manualLongitude !== '' ? Number(manualLongitude) : (currentCoordinates?.longitude ?? 0)
@@ -187,11 +187,6 @@ export default function SubmitBusiness({ navigation, route }: any) {
     if (Math.abs(currentLatitude) > 90 || Math.abs(currentLongitude) > 180) return
 
     setCurrentCoordinates({ latitude: currentLatitude, longitude: currentLongitude })
-    
-    const reverseGeocodedAddress = await reverseGeocodeCoordinates(currentLatitude, currentLongitude)
-    if (reverseGeocodedAddress) {
-      update('address', reverseGeocodedAddress)
-    }
   }
 
   const openGoogleMapsPicker = async () => {

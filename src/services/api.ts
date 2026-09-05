@@ -1,4 +1,5 @@
 import * as Location from 'expo-location'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 
 export type WeatherHourlyItem = {
   time: string
@@ -190,84 +191,261 @@ function fallbackCoordinatesByAddress(address: string): { latitude: number; long
   return null
 }
 
+const GEOCODE_STORAGE_KEY = '@manakandukur_geocode_cache_v1'
+const REVERSE_GEOCODE_STORAGE_KEY = '@manakandukur_reverse_geocode_cache_v1'
+const GEOCODE_MIN_INTERVAL_MS = 1100
+
+// In-memory caches for synchronous instant lookups.
+// Storing null prevents repeated failed network lookups for non-geocodable addresses.
+const geocodeMemoryCache = new Map<string, { latitude: number; longitude: number } | null>()
+const reverseGeocodeMemoryCache = new Map<string, string | null>()
+
+// In-flight promise caches to deduplicate concurrent requests for identical keys
+const inFlightGeocodePromises = new Map<string, Promise<{ latitude: number; longitude: number } | null>>()
+const inFlightReverseGeocodePromises = new Map<string, Promise<string | null>>()
+
+let isGeocodeCacheHydrated = false
+const hydratePromise: Promise<void> = (async () => {
+  try {
+    const [storedGeocode, storedReverse] = await Promise.all([
+      AsyncStorage.getItem(GEOCODE_STORAGE_KEY),
+      AsyncStorage.getItem(REVERSE_GEOCODE_STORAGE_KEY),
+    ])
+    if (storedGeocode) {
+      const parsed = JSON.parse(storedGeocode) as Record<string, { latitude: number; longitude: number } | null>
+      Object.entries(parsed).forEach(([k, v]) => {
+        if (!geocodeMemoryCache.has(k)) {
+          geocodeMemoryCache.set(k, v)
+        }
+      })
+    }
+    if (storedReverse) {
+      const parsed = JSON.parse(storedReverse) as Record<string, string | null>
+      Object.entries(parsed).forEach(([k, v]) => {
+        if (!reverseGeocodeMemoryCache.has(k)) {
+          reverseGeocodeMemoryCache.set(k, v)
+        }
+      })
+    }
+  } catch {
+    // Ignore storage errors
+  } finally {
+    isGeocodeCacheHydrated = true
+  }
+})()
+
+let saveGeocodeTimeout: ReturnType<typeof setTimeout> | null = null
+function scheduleSaveGeocodeCache() {
+  if (saveGeocodeTimeout) return
+  saveGeocodeTimeout = setTimeout(async () => {
+    saveGeocodeTimeout = null
+    try {
+      const obj: Record<string, { latitude: number; longitude: number } | null> = {}
+      geocodeMemoryCache.forEach((v, k) => { obj[k] = v })
+      await AsyncStorage.setItem(GEOCODE_STORAGE_KEY, JSON.stringify(obj))
+    } catch {
+      // Ignore storage errors
+    }
+  }, 2000)
+}
+
+let saveReverseGeocodeTimeout: ReturnType<typeof setTimeout> | null = null
+function scheduleSaveReverseGeocodeCache() {
+  if (saveReverseGeocodeTimeout) return
+  saveReverseGeocodeTimeout = setTimeout(async () => {
+    saveReverseGeocodeTimeout = null
+    try {
+      const obj: Record<string, string | null> = {}
+      reverseGeocodeMemoryCache.forEach((v, k) => { obj[k] = v })
+      await AsyncStorage.setItem(REVERSE_GEOCODE_STORAGE_KEY, JSON.stringify(obj))
+    } catch {
+      // Ignore storage errors
+    }
+  }, 2000)
+}
+
+function normalizeAddressKey(address: string): string {
+  return address.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function normalizeCoordsKey(latitude: number, longitude: number): string {
+  return `${latitude.toFixed(4)},${longitude.toFixed(4)}`
+}
+
 // Nominatim's free API allows at most 1 request/second. Serialize every caller through
 // one global queue so concurrent screens can't collectively exceed that limit.
 let geocodeQueue: Promise<unknown> = Promise.resolve()
-const GEOCODE_MIN_INTERVAL_MS = 1100
 
-export function geocodeAddress(address: string): Promise<{ latitude: number; longitude: number } | null> {
-  const fallback = fallbackCoordinatesByAddress(address)
-  if (!address || !address.trim()) return Promise.resolve(null)
+export async function geocodeAddress(address: string): Promise<{ latitude: number; longitude: number } | null> {
+  if (!address || !address.trim()) return null
+  const normalized = normalizeAddressKey(address)
 
-  const run = geocodeQueue.then(async () => {
-    try {
-      const params = new URLSearchParams({ format: 'jsonv2', limit: '1', q: `${address}, Andhra Pradesh, India` })
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
-        headers: { Accept: 'application/json', 'User-Agent': 'ManaKandukurApp/1.0' },
-      })
-      if (!response.ok) return fallback
-      const results = await response.json()
-      if (!Array.isArray(results) || !results[0]) return fallback
-      return { latitude: Number(results[0].lat), longitude: Number(results[0].lon) }
-    } catch {
-      return fallback
-    } finally {
-      await new Promise((resolve) => setTimeout(resolve, GEOCODE_MIN_INTERVAL_MS))
+  // 1. Check synchronous in-memory cache
+  if (geocodeMemoryCache.has(normalized)) {
+    return geocodeMemoryCache.get(normalized) ?? null
+  }
+
+  // 2. Wait for hydration if pending, then re-check
+  if (!isGeocodeCacheHydrated) {
+    await hydratePromise.catch(() => undefined)
+    if (geocodeMemoryCache.has(normalized)) {
+      return geocodeMemoryCache.get(normalized) ?? null
     }
-  })
+  }
 
-  geocodeQueue = run.catch(() => undefined)
-  return run
+  // 3. Fallback coordinates check
+  const fallback = fallbackCoordinatesByAddress(address)
+  if (fallback) {
+    geocodeMemoryCache.set(normalized, fallback)
+    scheduleSaveGeocodeCache()
+    return fallback
+  }
+
+  // 4. Return in-flight promise if one is already pending
+  const inFlight = inFlightGeocodePromises.get(normalized)
+  if (inFlight) {
+    return inFlight
+  }
+
+  // 5. Run request via rate-limiting queue
+  const requestPromise = (async () => {
+    const result = await new Promise<{ latitude: number; longitude: number } | null>((resolve) => {
+      geocodeQueue = geocodeQueue.then(async () => {
+        try {
+          if (geocodeMemoryCache.has(normalized)) {
+            resolve(geocodeMemoryCache.get(normalized) ?? null)
+            return
+          }
+          const params = new URLSearchParams({ format: 'jsonv2', limit: '1', q: `${address}, Andhra Pradesh, India` })
+          const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
+            headers: { Accept: 'application/json', 'User-Agent': 'ManaKandukurMobile/1.0' },
+          })
+          if (!response.ok) {
+            resolve(fallback)
+            return
+          }
+          const results = await response.json()
+          if (!Array.isArray(results) || !results[0]) {
+            resolve(fallback)
+            return
+          }
+          const lat = Number(results[0].lat)
+          const lon = Number(results[0].lon)
+          if (Number.isFinite(lat) && Number.isFinite(lon)) {
+            resolve({ latitude: lat, longitude: lon })
+          } else {
+            resolve(fallback)
+          }
+        } catch {
+          resolve(fallback)
+        } finally {
+          await new Promise((r) => setTimeout(r, GEOCODE_MIN_INTERVAL_MS))
+        }
+      }).catch(() => {
+        resolve(fallback)
+      })
+    })
+
+    geocodeMemoryCache.set(normalized, result)
+    scheduleSaveGeocodeCache()
+    inFlightGeocodePromises.delete(normalized)
+    return result
+  })()
+
+  inFlightGeocodePromises.set(normalized, requestPromise)
+  return requestPromise
 }
 
 export async function reverseGeocodeCoordinates(latitude: number, longitude: number): Promise<string | null> {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
   if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null
 
-  // 1. Try native expo-location reverse geocoding on device
-  try {
-    const results = await Location.reverseGeocodeAsync({ latitude, longitude })
-    if (results && results.length > 0) {
-      const place = results[0]
-      const name = place.district || place.subregion || place.city || place.name || place.street
-      if (name) return name
-    }
-  } catch {
-    // Continue to web/fallback fetch
+  const key = normalizeCoordsKey(latitude, longitude)
+
+  // 1. Check in-memory cache
+  if (reverseGeocodeMemoryCache.has(key)) {
+    return reverseGeocodeMemoryCache.get(key) ?? null
   }
 
-  // 2. Try fast & reliable free reverse geocode API (BigDataCloud)
-  try {
-    const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`
-    const res = await fetch(url)
-    if (res.ok) {
-      const data = await res.json()
-      const locality = data.locality || data.city || data.localityInfo?.administrative?.[3]?.name || data.localityInfo?.administrative?.[2]?.name || data.principalSubdivision
-      if (locality) return locality
+  // 2. Wait for hydration if pending
+  if (!isGeocodeCacheHydrated) {
+    await hydratePromise.catch(() => undefined)
+    if (reverseGeocodeMemoryCache.has(key)) {
+      return reverseGeocodeMemoryCache.get(key) ?? null
     }
-  } catch {
-    // Continue to Nominatim
   }
 
-  // 3. Fallback Nominatim with rate-limit queue
-  const run = geocodeQueue.then(async () => {
+  // 3. Check in-flight promise
+  const inFlight = inFlightReverseGeocodePromises.get(key)
+  if (inFlight) {
+    return inFlight
+  }
+
+  const requestPromise = (async () => {
+    let resolvedName: string | null = null
+
+    // 1. Try native expo-location reverse geocoding on device
     try {
-      const params = new URLSearchParams({ format: 'jsonv2', lat: String(latitude), lon: String(longitude) })
-      const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params}`, {
-        headers: { Accept: 'application/json', 'User-Agent': 'ManaKandukurApp/1.0' },
-      })
-      if (!response.ok) return null
-      const result = await response.json()
-      return result?.address?.village || result?.address?.suburb || result?.address?.town || result?.address?.city || result?.address?.road || result?.display_name || null
+      const results = await Location.reverseGeocodeAsync({ latitude, longitude })
+      if (results && results.length > 0) {
+        const place = results[0]
+        const name = place.district || place.subregion || place.city || place.name || place.street
+        if (name) resolvedName = name
+      }
     } catch {
-      return null
-    } finally {
-      await new Promise((resolve) => setTimeout(resolve, GEOCODE_MIN_INTERVAL_MS))
+      // Continue to web/fallback fetch
     }
-  })
 
-  geocodeQueue = run.catch(() => undefined)
-  return run
+    // 2. Try fast & reliable free reverse geocode API (BigDataCloud)
+    if (!resolvedName) {
+      try {
+        const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`
+        const res = await fetch(url)
+        if (res.ok) {
+          const data = await res.json()
+          const locality = data.locality || data.city || data.localityInfo?.administrative?.[3]?.name || data.localityInfo?.administrative?.[2]?.name || data.principalSubdivision
+          if (locality) resolvedName = locality
+        }
+      } catch {
+        // Continue to Nominatim
+      }
+    }
+
+    // 3. Fallback Nominatim with rate-limit queue
+    if (!resolvedName) {
+      resolvedName = await new Promise<string | null>((resolve) => {
+        geocodeQueue = geocodeQueue.then(async () => {
+          try {
+            const params = new URLSearchParams({ format: 'jsonv2', lat: String(latitude), lon: String(longitude) })
+            const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params}`, {
+              headers: { Accept: 'application/json', 'User-Agent': 'ManaKandukurMobile/1.0' },
+            })
+            if (!response.ok) {
+              resolve(null)
+              return
+            }
+            const result = await response.json()
+            const name = result?.address?.village || result?.address?.suburb || result?.address?.town || result?.address?.city || result?.address?.road || result?.display_name || null
+            resolve(name)
+          } catch {
+            resolve(null)
+          } finally {
+            await new Promise((r) => setTimeout(r, GEOCODE_MIN_INTERVAL_MS))
+          }
+        }).catch(() => {
+          resolve(null)
+        })
+      })
+    }
+
+    reverseGeocodeMemoryCache.set(key, resolvedName)
+    scheduleSaveReverseGeocodeCache()
+    inFlightReverseGeocodePromises.delete(key)
+    return resolvedName
+  })()
+
+  inFlightReverseGeocodePromises.set(key, requestPromise)
+  return requestPromise
 }
 
 export function buildGoogleMapsDirectionsUrl(
@@ -431,7 +609,14 @@ export async function uploadMarketplaceImage(
   return response.json() as Promise<{ data: { image: string; path: string } }>
 }
 
-export async function recordAppUsage(deviceId: string, options?: { userPhone?: string | null; userName?: string | null; appVersion?: string | null; platform?: string | null }) {
+export async function recordAppUsage(deviceId: string, options?: {
+  userPhone?: string | null
+  userName?: string | null
+  deviceName?: string | null
+  location?: string | null
+  appVersion?: string | null
+  platform?: string | null
+}) {
   if (!apiBaseUrl) return
   try {
     await fetchJson<{ data: { id: string; deviceId: string; visitedAt: string } }>('/api/usage', {
@@ -441,6 +626,8 @@ export async function recordAppUsage(deviceId: string, options?: { userPhone?: s
         deviceId,
         userPhone: options?.userPhone || null,
         userName: options?.userName || null,
+        deviceName: options?.deviceName || null,
+        location: options?.location || null,
         appVersion: options?.appVersion || null,
         platform: options?.platform || null,
       }),
@@ -472,6 +659,14 @@ export type AdminActivityItem = {
   entity_id: string
   label: string
   created_at: string
+  user_name?: string | null
+  userName?: string | null
+  user_phone?: string | null
+  userPhone?: string | null
+  device_name?: string | null
+  deviceName?: string | null
+  location?: string | null
+  platform?: string | null
 }
 
 export async function fetchAdminSummary(userPhone: string) {
