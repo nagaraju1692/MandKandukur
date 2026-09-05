@@ -1,12 +1,17 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { AppState, Platform } from 'react-native'
+import { AppState, Linking, Platform } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import Constants from 'expo-constants'
 import * as Notifications from 'expo-notifications'
 import * as Location from 'expo-location'
 import { useDirectory } from './DirectoryContext'
 import { fetchWeather, registerPushToken, WeatherReport } from '../services/api'
+import { configureNotificationHandler, registerForPushNotificationsAsync } from '../services/pushNotifications'
+import { fetchLatestUpdate } from '../services/updateCheck'
 import { useAuth } from './AuthContext'
+
+// Fallback page when a user taps a "new version" push but the GitHub
+// release fetch is rate-limited or fails.
+const RELEASES_PAGE_URL = 'https://github.com/nagaraju1692/Kandukur-mobile-apk/releases/latest'
 
 export type MobileNotification = {
   id: string
@@ -116,14 +121,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     if (Platform.OS === 'web') return
 
-    Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowBanner: true,
-        shouldShowList: true,
-        shouldPlaySound: true,
-        shouldSetBadge: false,
-      }),
-    })
+    configureNotificationHandler()
 
     let active = true
     const setupNotifications = async () => {
@@ -136,33 +134,42 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           })
         }
 
-        const currentPermissions = await Notifications.getPermissionsAsync()
-        const permissions = currentPermissions.granted
-          ? currentPermissions
-          : await Notifications.requestPermissionsAsync()
-        if (!active || !permissions.granted) return
-
         let deviceId = await AsyncStorage.getItem(deviceIdKey)
         if (!deviceId) {
           deviceId = `device-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
           await AsyncStorage.setItem(deviceIdKey, deviceId)
         }
 
-        const projectId = Constants.expoConfig?.extra?.eas?.projectId
-        const token = (await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined)).data
+        // Requests permission, creates the "updates" channel and persists the token.
+        const token = await registerForPushNotificationsAsync()
+        if (!active || !token) return
         await registerPushToken(token, deviceId, Platform.OS, user?.phone)
       } catch {
         // Notifications are optional; startup and in-app notifications must continue working.
       }
     }
 
-    const responseSubscription = Notifications.addNotificationResponseReceivedListener(() => {
+    // Tapping a "new version" push notification reuses the in-app update flow:
+    // fetch the latest GitHub release and open the APK download URL.
+    const handleNotificationResponse = async (response: Notifications.NotificationResponse | null) => {
+      if (!response) return
       setCurrentTime(Date.now())
+      const data = response.notification.request.content.data as { type?: string } | undefined
+      if (data?.type !== 'update') return
+      try {
+        const update = await fetchLatestUpdate()
+        await Linking.openURL(update?.downloadUrl || RELEASES_PAGE_URL)
+      } catch {
+        Linking.openURL(RELEASES_PAGE_URL).catch(() => undefined)
+      }
+    }
+
+    const responseSubscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      void handleNotificationResponse(response)
     })
     setupNotifications()
-    Notifications.getLastNotificationResponseAsync().then((response) => {
-      if (active && response) setCurrentTime(Date.now())
-    }).catch(() => undefined)
+    // Handle a cold start triggered by tapping the notification while the app was closed.
+    Notifications.getLastNotificationResponseAsync().then(handleNotificationResponse).catch(() => undefined)
 
     return () => {
       active = false

@@ -26,6 +26,13 @@
     },
     "plugins": [
       [
+        "expo-notifications",
+        {
+          "icon": "./src/assets/manakundur-app-icon-square.png",
+          "color": "#514BD5"
+        }
+      ],
+      [
         "expo-speech-recognition",
         {
           "microphonePermission": "Allow ManaKandukur to use microphone for voice search."
