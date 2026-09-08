@@ -15,6 +15,7 @@ import { useVoiceSearch } from '../ui/useVoiceSearch'
 
 export default function Search({ navigation, route }: any) {
   const [query, setQuery] = useState(route.params?.query || '')
+  const [debouncedQuery, setDebouncedQuery] = useState(route.params?.query || '')
   const [selectedResultId, setSelectedResultId] = useState<string | null>(null)
   const { favorites, toggleFavorite, isLoggedIn } = useAuth()
   const { t, category: categoryLabel, businessName } = useLanguage()
@@ -26,11 +27,34 @@ export default function Search({ navigation, route }: any) {
     setQuery(route.params?.query || '')
   }, [route.params?.query])
 
+  React.useEffect(() => {
+    if (!query.trim()) {
+      setDebouncedQuery('')
+      return
+    }
+    const timeout = setTimeout(() => setDebouncedQuery(query), 300)
+    return () => clearTimeout(timeout)
+  }, [query])
+
   const results = useMemo(() => {
-    const normalized = query.trim().toLowerCase()
+    const normalized = debouncedQuery.trim().toLowerCase()
     if (!normalized) return businesses.slice(0, 30)
-    return businesses.filter((business) => `${business.name} ${business.categoryName} ${business.address}`.toLowerCase().includes(normalized)).slice(0, 30)
-  }, [businesses, query])
+    const relevanceScore = (business: (typeof businesses)[number]) => {
+      const names = [business.name, business.nameTe].filter(Boolean).map((value) => String(value).toLowerCase())
+      if (names.some((value) => value.startsWith(normalized))) return 0
+      if (names.some((value) => value.includes(normalized))) return 1
+      if ((business.address || '').toLowerCase().includes(normalized)) return 2
+      return 3
+    }
+    const distanceOf = (business: (typeof businesses)[number]) => distances[business.id] ?? distances[business.address] ?? Number.POSITIVE_INFINITY
+    return businesses.filter((business) => {
+      const searchableText = [business.name, business.nameTe, business.categoryName, business.address, business.description]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      return searchableText.includes(normalized)
+    }).sort((first, second) => relevanceScore(first) - relevanceScore(second) || distanceOf(first) - distanceOf(second)).slice(0, 30)
+  }, [businesses, debouncedQuery, distances])
   React.useEffect(() => { if (ready) ensureAddresses(results.map((business) => ({ id: business.id, address: business.address, latitude: business.latitude, longitude: business.longitude }))) }, [results, ready, ensureAddresses])
 
   return (
@@ -61,7 +85,7 @@ export default function Search({ navigation, route }: any) {
         </View>
 
         {query.trim() && results.length === 0 && <Text style={styles.empty}>{t('No matching places found.', 'సరిపోలే ప్రదేశాలు కనుగొనబడలేదు.')}</Text>}
-        {sortNearest(results).map((business) => (
+        {(debouncedQuery.trim() ? results : sortNearest(results)).map((business) => (
           <Pressable key={business.id} style={styles.resultCard} onPress={() => { setSelectedResultId(business.id); navigation.navigate('BusinessDetails', { id: business.id }) }}>
             <View style={[styles.resultImageWrap, selectedResultId === business.id && styles.resultImageWrapSelected]}><Image source={getBusinessImage(business.image, business.categoryName)} style={styles.image} /><Pressable style={styles.favoriteButton} onPress={() => isLoggedIn ? toggleFavorite(business.id) : navigation.navigate('Profile')}><Text style={[styles.favorite, favorites.includes(business.id) && styles.favoriteActive]}>{favorites.includes(business.id) ? '♥' : '♡'}</Text></Pressable></View>
             <View style={styles.resultBody}><Text style={styles.name}>{businessName(business.name, business.nameTe)}</Text><Text style={styles.category}>{categoryLabel(business.categoryName)}</Text><Text style={styles.address}>📍 {business.address}</Text><Text style={styles.distance}>{(distances[business.id] ?? distances[business.address]) !== undefined ? `${((distances[business.id] ?? distances[business.address]) as number).toFixed(1)} ${t('km away', 'కి.మీ దూరంలో')}` : t('Finding distance…', 'దూరాన్ని కనుగొంటున్నాము…')}</Text><Pressable onPress={() => Linking.openURL(buildGoogleMapsDirectionsUrl({ latitude: business.latitude, longitude: business.longitude, address: business.address }, location ?? undefined))}><Text style={styles.linkText}>{t('Directions', 'దిశలు')}</Text></Pressable></View>

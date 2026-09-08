@@ -234,7 +234,7 @@ function fallbackCoordinatesByAddress(address: string): { latitude: number; long
 }
 
 const GEOCODE_STORAGE_KEY = '@manakandukur_geocode_cache_v1'
-const REVERSE_GEOCODE_STORAGE_KEY = '@manakandukur_reverse_geocode_cache_v1'
+const REVERSE_GEOCODE_STORAGE_KEY = '@manakandukur_reverse_geocode_cache_v2'
 const GEOCODE_MIN_INTERVAL_MS = 1100
 
 // In-memory caches for synchronous instant lookups.
@@ -398,6 +398,15 @@ export async function geocodeAddress(address: string): Promise<{ latitude: numbe
   return requestPromise
 }
 
+function joinLocalityAndRegion(locality: string | null | undefined, region: string | null | undefined): string | null {
+  const place = (locality || '').trim()
+  const state = (region || '').trim()
+  if (!place) return state || null
+  if (!state) return place
+  if (place.toLowerCase().includes(state.toLowerCase())) return place
+  return `${place}, ${state}`
+}
+
 export async function reverseGeocodeCoordinates(latitude: number, longitude: number): Promise<string | null> {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
   if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null
@@ -431,8 +440,8 @@ export async function reverseGeocodeCoordinates(latitude: number, longitude: num
       const results = await Location.reverseGeocodeAsync({ latitude, longitude })
       if (results && results.length > 0) {
         const place = results[0]
-        const name = place.district || place.subregion || place.city || place.name || place.street
-        if (name) resolvedName = name
+        const locality = place.district || place.subregion || place.city || place.name || place.street
+        resolvedName = joinLocalityAndRegion(locality, place.region)
       }
     } catch {
       // Continue to web/fallback fetch
@@ -445,8 +454,8 @@ export async function reverseGeocodeCoordinates(latitude: number, longitude: num
         const res = await fetch(url)
         if (res.ok) {
           const data = await res.json()
-          const locality = data.locality || data.city || data.localityInfo?.administrative?.[3]?.name || data.localityInfo?.administrative?.[2]?.name || data.principalSubdivision
-          if (locality) resolvedName = locality
+          const locality = data.locality || data.city || data.localityInfo?.administrative?.[3]?.name || data.localityInfo?.administrative?.[2]?.name
+          resolvedName = joinLocalityAndRegion(locality, data.principalSubdivision)
         }
       } catch {
         // Continue to Nominatim
@@ -467,8 +476,8 @@ export async function reverseGeocodeCoordinates(latitude: number, longitude: num
               return
             }
             const result = await response.json()
-            const name = result?.address?.village || result?.address?.suburb || result?.address?.town || result?.address?.city || result?.address?.road || result?.display_name || null
-            resolve(name)
+            const locality = result?.address?.village || result?.address?.suburb || result?.address?.town || result?.address?.city || result?.address?.road
+            resolve(joinLocalityAndRegion(locality, result?.address?.state) || result?.display_name || null)
           } catch {
             resolve(null)
           } finally {

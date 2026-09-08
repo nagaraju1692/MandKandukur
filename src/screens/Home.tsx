@@ -452,7 +452,7 @@ export default function Home({ navigation }: any) {
 
         <View style={styles.locationRow}>
           <Text style={styles.locationPin}>📍</Text>
-          <Text style={styles.locationText}>{weather?.locationName ? `${weather.locationName}, Andhra Pradesh` : t('Kandukur, Andhra Pradesh', 'కందుకూరు, ఆంధ్రప్రదేశ్')}</Text>
+          <Text style={styles.locationText}>{weather?.locationName || t('Kandukur, Andhra Pradesh', 'కందుకూరు, ఆంధ్రప్రదేశ్')}</Text>
         </View>
 
                 <View style={styles.utilityRow}>
