@@ -2,7 +2,7 @@
   "expo": {
     "name": "ManaKandukur Mobile",
     "slug": "nagaraju",
-    "version": "1.0.10",
+    "version": "1.0.12",
     "orientation": "portrait",
     "icon": "./src/assets/manakundur-app-icon-square.png",
     "splash": {
@@ -12,7 +12,7 @@
     },
     "android": {
       "package": "com.manakandukur.directory",
-      "versionCode": 11,
+      "versionCode": 13,
       "adaptiveIcon": {
         "foregroundImage": "./src/assets/manakundur-app-icon-square.png",
         "backgroundColor": "#ffffff"
