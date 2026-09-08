@@ -5,6 +5,7 @@ import { getBusinessImage, getCategoryImage } from '../utils/categoryImages'
 import MobileHeader from './MobileHeader'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
+import { useNotifications } from '../context/NotificationContext'
 import { useReviews } from '../context/ReviewContext'
 import { useNearby } from '../context/NearbyContext'
 import { useDirectory } from '../context/DirectoryContext'
@@ -200,6 +201,7 @@ export default function Home({ navigation }: any) {
   const { getReviewStats } = useReviews()
   const { distances, ready, ensureAddresses, sortNearest, location } = useNearby()
   const { t, category: categoryLabel, businessName } = useLanguage()
+  const { refreshNotifications } = useNotifications()
   const { businesses, categories, announcements: updates, loading, error, retry } = useDirectory()
   const cards = homeCategoryIds.map((id) => categories.find((category) => category.id === id)).filter((category): category is NonNullable<typeof category> => Boolean(category))
   const categoryListingCount = (categoryId: string) => {
@@ -384,11 +386,11 @@ export default function Home({ navigation }: any) {
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
     try {
-      await Promise.allSettled([loadUtilities(), retry?.()])
+      await Promise.allSettled([loadUtilities(), retry?.(), refreshNotifications()])
     } finally {
       setRefreshing(false)
     }
-  }, [loadUtilities, retry])
+  }, [loadUtilities, refreshNotifications, retry])
 
   const activeAnnouncements = useMemo(() => {
     const now = Date.now()

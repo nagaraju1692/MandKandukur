@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useAuth } from '../context/AuthContext'
 import { useLanguage } from '../context/LanguageContext'
-import { useNotifications } from '../context/NotificationContext'
+import { isExpiredWeatherNotification, useNotifications } from '../context/NotificationContext'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useWindowDimensions } from 'react-native'
 
@@ -10,23 +10,32 @@ export default function MobileHeader({ navigation }: { navigation: any }) {
   const insets = useSafeAreaInsets()
   const { user } = useAuth()
   const { language, setLanguage, t } = useLanguage()
-  const { notifications, clearNotifications } = useNotifications()
+  const { notifications, clearNotifications, dismissNotification, refreshNotifications } = useNotifications()
   const { width } = useWindowDimensions()
   const isCompact = width < 430
   const [showNotifications, setShowNotifications] = useState(false)
   const [selectedNotification, setSelectedNotification] = useState<typeof notifications[number] | null>(null)
   const previousNotificationCount = useRef(notifications.length)
+  const [panelTime, setPanelTime] = useState(() => Date.now())
+  const visibleNotifications = notifications.filter((notification) => !isExpiredWeatherNotification(notification, panelTime))
 
   useEffect(() => {
-    if (showNotifications && previousNotificationCount.current > 0 && notifications.length === 0) {
+    if (!showNotifications) return
+    setPanelTime(Date.now())
+    const timer = setInterval(() => setPanelTime(Date.now()), 30 * 1000)
+    return () => clearInterval(timer)
+  }, [showNotifications])
+
+  useEffect(() => {
+    if (showNotifications && previousNotificationCount.current > 0 && visibleNotifications.length === 0) {
       setShowNotifications(false)
       setSelectedNotification(null)
     }
-    if (selectedNotification && !notifications.some((notification) => notification.id === selectedNotification.id)) {
+    if (selectedNotification && !visibleNotifications.some((notification) => notification.id === selectedNotification.id)) {
       setSelectedNotification(null)
     }
-    previousNotificationCount.current = notifications.length
-  }, [notifications, selectedNotification, showNotifications])
+    previousNotificationCount.current = visibleNotifications.length
+  }, [selectedNotification, showNotifications, visibleNotifications])
 
   return (
     <View style={[styles.header, { paddingTop: insets.top + 6 }]}>
@@ -64,10 +73,14 @@ export default function MobileHeader({ navigation }: { navigation: any }) {
           hitSlop={12}
           accessibilityRole="button"
           accessibilityLabel={t('Open notifications', 'నోటిఫికేషన్‌లను తెరవండి')}
-          onPress={() => setShowNotifications(true)}
+          onPress={() => {
+            refreshNotifications()
+            setPanelTime(Date.now())
+            setShowNotifications(true)
+          }}
         >
           <Text style={styles.bell}>🔔</Text>
-          {notifications.length > 0 && !showNotifications && <View style={styles.notificationDot} />}
+          {visibleNotifications.length > 0 && !showNotifications && <View style={styles.notificationDot} />}
         </Pressable>
       </View>
 
@@ -77,7 +90,7 @@ export default function MobileHeader({ navigation }: { navigation: any }) {
             <View style={styles.notificationHeading}>
               <View>
                 <Text style={styles.notificationTitle}>{t('Notifications', 'నోటిఫికేషన్లు')}</Text>
-                <Text style={styles.notificationCount}>{notifications.length} {t('recent updates', 'తాజా అప్‌డేట్లు')}</Text>
+                <Text style={styles.notificationCount}>{visibleNotifications.length} {t('recent updates', 'తాజా అప్‌డేట్లు')}</Text>
               </View>
               <View style={styles.notificationActions}>
                 <Pressable style={styles.clearButton} onPress={clearNotifications}><Text style={styles.clearText}>{t('Clear', 'క్లియర్')}</Text></Pressable>
@@ -85,17 +98,21 @@ export default function MobileHeader({ navigation }: { navigation: any }) {
               </View>
             </View>
             <ScrollView style={styles.notificationList} contentContainerStyle={styles.notificationListContent}>
-              {notifications.length === 0 ? <Text style={styles.emptyNotifications}>{t('No new notifications.', 'కొత్త నోటిఫికేషన్‌లు లేవు.')}</Text> : notifications.map((notification, index) => (
-                <Pressable
-                  key={`${notification.title}-${index}`}
-                  style={styles.notificationCard}
-                  onPress={() => setSelectedNotification(notification)}
-                  accessibilityRole="button"
-                >
-                  <Text style={styles.notificationCardTitle}>{notification.title}</Text>
-                  <Text style={styles.notificationCardMessage}>{notification.message}</Text>
-                  <Text style={styles.notificationCardTime}>{notification.time}</Text>
-                </Pressable>
+              {visibleNotifications.length === 0 ? <Text style={styles.emptyNotifications}>{t('No new notifications.', 'కొత్త నోటిఫికేషన్‌లు లేవు.')}</Text> : visibleNotifications.map((notification) => (
+                <View key={notification.id} style={styles.notificationCard}>
+                  <Pressable style={styles.notificationCardContent} onPress={() => setSelectedNotification(notification)} accessibilityRole="button">
+                    <Text style={styles.notificationCardTitle}>{notification.title}</Text>
+                    <Text style={styles.notificationCardMessage}>{notification.message}</Text>
+                    <Text style={styles.notificationCardTime}>{notification.time}</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.dismissButton}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('Delete notification', 'నోటిఫికేషన్‌ను తొలగించండి')}
+                    onPress={() => void dismissNotification(notification.id)}
+                  ><Text style={styles.dismissText}>×</Text></Pressable>
+                </View>
               ))}
             </ScrollView>
           </View>
@@ -156,7 +173,10 @@ const styles = StyleSheet.create({
   close: { color: '#5C5A57', fontSize: 28, lineHeight: 30 },
   notificationList: { maxHeight: 470 },
   notificationListContent: { gap: 10, paddingBottom: 2 },
-  notificationCard: { padding: 12, borderRadius: 14, borderWidth: 1, borderColor: '#F1D9CB', backgroundColor: '#FFF5EA' },
+  notificationCard: { flexDirection: 'row', alignItems: 'flex-start', borderRadius: 14, borderWidth: 1, borderColor: '#F1D9CB', backgroundColor: '#FFF5EA' },
+  notificationCardContent: { flex: 1, padding: 12 },
+  dismissButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginTop: 4, marginRight: 4, borderRadius: 18 },
+  dismissText: { color: '#8A7C73', fontSize: 24, lineHeight: 26 },
   notificationCardTitle: { color: '#38302C', fontSize: 14, fontWeight: '800' },
   notificationCardMessage: { marginTop: 5, color: '#5D554F', fontSize: 12, lineHeight: 17 },
   notificationCardTime: { marginTop: 8, color: '#8A7C73', fontSize: 11 },

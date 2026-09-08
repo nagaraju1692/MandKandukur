@@ -76,6 +76,12 @@ const weatherConditions: Record<number, string> = {
   99: 'Thunderstorm with hail',
 }
 
+function normalizeWeatherTime(time: string, utcOffsetSeconds: number) {
+  const localTimestamp = Date.parse(`${time}Z`)
+  if (!Number.isFinite(localTimestamp) || !Number.isFinite(utcOffsetSeconds)) return time
+  return new Date(localTimestamp - utcOffsetSeconds * 1000).toISOString()
+}
+
 export async function fetchWeather(coords?: { latitude: number; longitude: number } | null): Promise<WeatherReport> {
   const latitude = coords?.latitude != null && Number.isFinite(coords.latitude) ? coords.latitude : 15.2154
   const longitude = coords?.longitude != null && Number.isFinite(coords.longitude) ? coords.longitude : 79.9072
@@ -93,8 +99,11 @@ export async function fetchWeather(coords?: { latitude: number; longitude: numbe
   const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`)
   if (!response.ok) throw new Error(`Weather request failed: ${response.status}`)
   const data = await response.json()
-  const hourlyTimes: string[] = data.hourly?.time || []
-  const currentMs = new Date(data.current?.time || Date.now()).getTime()
+  const utcOffsetSeconds = Number(data.utc_offset_seconds)
+  const toAbsoluteTime = (time: string) => normalizeWeatherTime(time, utcOffsetSeconds)
+  const hourlyTimes: string[] = (data.hourly?.time || []).map(toAbsoluteTime)
+  const currentTime = typeof data.current?.time === 'string' ? toAbsoluteTime(data.current.time) : new Date().toISOString()
+  const currentMs = new Date(currentTime).getTime()
   // Include the active current hour (the hour interval that encompasses currentMs)
   let firstUpcomingHour = hourlyTimes.findIndex((time) => new Date(time).getTime() + 60 * 60 * 1000 > currentMs)
   if (firstUpcomingHour < 0) firstUpcomingHour = 0
@@ -136,7 +145,7 @@ export async function fetchWeather(coords?: { latitude: number; longitude: numbe
     humidity: `${Math.round(data.current.relative_humidity_2m)}% humidity`,
     wind: `${Math.round(data.current.wind_speed_10m)} km/h wind`,
     precipitation: currentPrecip,
-    updatedAt: data.current.time,
+    updatedAt: currentTime,
     locationName,
     latitude,
     longitude,
