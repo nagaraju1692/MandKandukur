@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions, Linking } from 'react-native'
+import { AppState, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View, useWindowDimensions, Linking } from 'react-native'
 import BottomNav from './BottomNav'
 import { getBusinessImage, getCategoryImage } from '../utils/categoryImages'
 import MobileHeader from './MobileHeader'
@@ -337,6 +337,27 @@ export default function Home({ navigation }: any) {
   useEffect(() => {
     loadUtilities()
   }, [loadUtilities])
+
+  useEffect(() => {
+    let active = true
+    const refreshGoldRate = async () => {
+      try {
+        const rate = await fetchGoldRate()
+        if (active) setGold(rate)
+      } catch {
+        // Keep the last displayed rate when a refresh is unavailable.
+      }
+    }
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshGoldRate()
+    })
+    const timer = setInterval(refreshGoldRate, 60 * 1000)
+    return () => {
+      active = false
+      subscription.remove()
+      clearInterval(timer)
+    }
+  }, [])
 
   useEffect(() => {
     if (cricketMatches.length < 2 || isCricketInteracting) return

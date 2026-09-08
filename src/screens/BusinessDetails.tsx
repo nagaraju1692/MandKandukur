@@ -10,6 +10,7 @@ import { useNearby } from '../context/NearbyContext'
 import { useDirectory } from '../context/DirectoryContext'
 import DirectoryState from './DirectoryState'
 import { colors } from '../ui/theme'
+
 import { apiBaseUrl, buildGoogleMapsDirectionsUrl } from '../services/api'
 import FocusTextInput from '../ui/FocusTextInput'
 import RemoteImage from '../ui/RemoteImage'

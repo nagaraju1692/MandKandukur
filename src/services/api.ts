@@ -35,6 +35,16 @@ export type GoldRate = {
   updatedAt: string
 }
 
+type StoredGoldRate = {
+  date: string
+  rate: GoldRate
+}
+
+const GOLD_RATE_STORAGE_KEY = '@manakandukur_gold_rate_v3'
+const GOLD_RATE_REFRESH_HOUR = 10
+const FALLBACK_22K_RATE = 14130
+const HYDERABAD_GOLD_RATE_URL = 'https://www.goodreturns.in/gold-rates/hyderabad.html'
+
 const weatherConditions: Record<number, string> = {
   0: 'Clear sky',
   1: 'Mainly clear',
@@ -158,11 +168,43 @@ export async function fetchWeather(coords?: { latitude: number; longitude: numbe
 }
 
 export async function fetchGoldRate(): Promise<GoldRate> {
-  // Andhra Pradesh & Ongole domestic retail gold rates
-  // 22K @ ₹14,725/g -> 8g (Savaram) = ₹1,17,800
-  // 24K @ ₹16,064/g -> 8g (Savaram) = ₹1,28,512
-  // 18K @ ₹12,048/g -> 8g (Savaram) = ₹96,384
-  const pricePerGram22K = 14725
+  const now = new Date()
+  const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  let stored: StoredGoldRate | null = null
+
+  try {
+    const rawStoredRate = await AsyncStorage.getItem(GOLD_RATE_STORAGE_KEY)
+    if (rawStoredRate) stored = JSON.parse(rawStoredRate) as StoredGoldRate
+  } catch {
+    // Use the online value or fallback when local storage is unavailable.
+  }
+
+  const isAfterRefreshTime = now.getHours() >= GOLD_RATE_REFRESH_HOUR
+  if (stored?.rate && (!isAfterRefreshTime || stored.date === date)) return stored.rate
+
+  if (!isAfterRefreshTime) {
+    return stored?.rate || buildGoldRate(FALLBACK_22K_RATE, new Date().toISOString())
+  }
+
+  try {
+    const response = await fetch(HYDERABAD_GOLD_RATE_URL)
+    if (!response.ok) throw new Error(`Hyderabad gold rate request failed: ${response.status}`)
+    const page = await response.text()
+    const rateMatch = page.match(/id=["']22K-price["'][^>]*>(?:&#x20b9;|₹)?\s*([\d,]+)/i)
+    const pricePerGram22K = rateMatch ? Number(rateMatch[1].replace(/,/g, '')) : NaN
+    if (!Number.isFinite(pricePerGram22K) || pricePerGram22K <= 0) {
+      throw new Error('Hyderabad gold rate was not found')
+    }
+
+    const rate = buildGoldRate(pricePerGram22K, new Date().toISOString())
+    await AsyncStorage.setItem(GOLD_RATE_STORAGE_KEY, JSON.stringify({ date, rate } satisfies StoredGoldRate))
+    return rate
+  } catch {
+    return stored?.rate || buildGoldRate(FALLBACK_22K_RATE, new Date().toISOString())
+  }
+}
+
+function buildGoldRate(pricePerGram22K: number, updatedAt: string): GoldRate {
   const pricePerGram24K = Math.round(pricePerGram22K * 24 / 22)
   const pricePerGram18K = Math.round(pricePerGram22K * 18 / 22)
 
@@ -173,7 +215,7 @@ export async function fetchGoldRate(): Promise<GoldRate> {
     pricePerSavaram18K: pricePerGram18K * 8,
     pricePerSavaram22K: pricePerGram22K * 8,
     pricePerSavaram: pricePerGram24K * 8,
-    updatedAt: new Date().toISOString(),
+    updatedAt,
   }
 }
 

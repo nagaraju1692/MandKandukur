@@ -9,6 +9,9 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test",
+    "test:e2e:chrome": "set PW_BROWSER=chrome&& playwright test",
+    "test:e2e:edge": "set PW_BROWSER=msedge&& playwright test",
     "apk:preview": "npx eas-cli@latest build --platform android --profile preview",
     "apk:production": "npx eas-cli@latest build --platform android --profile production"
   },
@@ -39,6 +42,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@playwright/test": "^1.55.0",
     "@types/react": "~19.1.10",
     "babel-preset-expo": "~54.0.10",
     "typescript": "^5.9.3"
